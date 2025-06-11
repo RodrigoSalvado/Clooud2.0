@@ -1,4 +1,4 @@
-name: Deploy Bicep com Azure e VNet + Private Endpoints (Unificado)
+name: Deploy Bicep com Azure
 
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
           az bicep install || true
           az bicep build --file templates/main.bicep
 
-      # 4. (Opcional) Criar Resource Group se necessário
+      # 4. Criar Resource Group se necessário
       - name: Criar Resource Group
         run: |
           az group create --name MiniProjetoCloud2.0 --location westeurope
@@ -43,6 +43,10 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
+            # Ativar shell strict para detectar erros cedo
+            set -euxo pipefail
+
+            echo "Iniciar deploy unificado..."
             az deployment group create \
               --resource-group MiniProjetoCloud2.0 \
               --template-file templates/main.bicep \
@@ -68,14 +72,20 @@ jobs:
                 containerSasToken='' \
                 containerRegistryUrl='' \
                 containerRegistryUsername='' \
-                containerRegistryPassword=''
+                containerRegistryPassword='' \
+              --only-show-errors
 
-      # 6. (Opcional) Pós-verificação: obter outputs
+      # 6. (Opcional) Mostrar outputs do deploy
       - name: Mostrar outputs do deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
+            # Captura o nome do deployment mais recente no RG
+            DEPLOY_NAME=$(az deployment group list \
+              --resource-group MiniProjetoCloud2.0 \
+              --query '[0].name' -o tsv)
+            echo "Deployment name: $DEPLOY_NAME"
             az deployment group show \
               --resource-group MiniProjetoCloud2.0 \
-              --name "$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)" \
+              --name "$DEPLOY_NAME" \
               --query properties.outputs
