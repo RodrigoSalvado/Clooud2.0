@@ -1,37 +1,45 @@
-name: Deploy Bicep com Azure (OIDC)
+name: Deploy Bicep com Azure via OIDC
 
+# Dispara em push para a branch main (altera se a tua branch principal tiver outro nome)
 on:
   push:
     branches:
       - main
+      - master
 
+# Permissões necessárias para OIDC
 permissions:
-  id-token: write
-  contents: read
+  id-token: write       # permite obter o token OIDC do GitHub
+  contents: read        # permite checkout do código
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout código
+      - name: Checkout do repositório
         uses: actions/checkout@v4
 
       - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}         # Application (client) ID do SP
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}         # Tenant ID onde a App Registration existe
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}  # Subscription ID alvo
+          # Sem client-secret: usa OIDC (assume que já criaste Federated Identity Credential)
 
-      - name: Validar Bicep
+      - name: Validar Bicep (build/compilação)
         run: |
+          az bicep install || true   # instala Bicep CLI se não existir (silencia erro se já estiver instalado)
           az bicep build --file templates/resource-group.bicep
 
       - name: Deploy Bicep para Azure
         uses: azure/cli@v1
         with:
           inlineScript: |
+            # Opcionalmente, podes definir explicitamente a subscrição (mas normalmente azure/login já define o contexto)
+            # az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
             az deployment sub create \
               --location westeurope \
               --template-file templates/resource-group.bicep \
