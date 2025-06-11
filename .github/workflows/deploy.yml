@@ -1,10 +1,9 @@
-name: Deploy Bicep to Azure
+name: Deploy Bicep com Azure
 
 on:
   push:
     branches:
       - main
-      - master
 
 jobs:
   deploy:
@@ -14,10 +13,12 @@ jobs:
       - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Login no Azure
-        uses: azure/login@v1
+      - name: Login no Azure com Login v2
+        uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy Bicep para Azure
         uses: azure/cli@v1
@@ -25,5 +26,5 @@ jobs:
           inlineScript: |
             az deployment sub create \
               --location westeurope \
-              --template-file templates/resource-group.bicep \
-              --parameters rgName='MiniProjetoCloud2.0' location='westeurope'
+              --template-file infra/main.bicep \
+              --parameters rgName='meu-rg-github-actions' location='westeurope'
