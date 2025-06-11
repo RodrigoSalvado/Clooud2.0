@@ -4,12 +4,7 @@ targetScope = 'resourceGroup'
 @minLength(3)
 @maxLength(24)
 @description('Nome da Storage Account (entre 3 e 24 caracteres, minúsculas e dígitos; sem pontos).')
-param storageAccountName string = 'miniprojetostorage20'
-
-@minLength(3)
-@maxLength(63)
-@description('Nome do Blob Container (entre 3 e 63 caracteres; minúsculas, dígitos e traços permitidos).')
-param containerName string = 'reddit-posts'
+param storageAccountName string
 
 @description('Localização. Por defeito, usa a localização do Resource Group.')
 param location string = resourceGroup().location
@@ -26,10 +21,8 @@ param skuName string = 'Standard_LRS'
 
 @allowed([
   'StorageV2'
-  'BlobStorage'
-  'Storage'
 ])
-@description('Kind da Storage Account')
+@description('Kind da Storage Account. Geralmente StorageV2.')
 param kind string = 'StorageV2'
 
 @allowed([
@@ -42,10 +35,10 @@ param accessTier string = 'Hot'
 @description('Forçar apenas tráfego HTTPS')
 param allowHttpsTrafficOnly bool = true
 
-@description('Habilitar versioning em blobs')
+@description('Habilitar versioning em blobs? Se true, configuramos via child resource blobServices.')
 param enableBlobVersioning bool = false
 
-@description('Habilitar soft delete para blobs em dias (0 desativa)')
+@description('Número de dias para soft delete de blobs. Se 0 ou negativo, não configuramos soft delete.')
 param blobSoftDeleteDays int = 0
 
 @description('DefaultAction para network rules: Allow ou Deny')
@@ -54,7 +47,7 @@ param defaultAction string = 'Allow'
 @description('Lista de CIDR ou IPs para permitir; vazio = acesso público (menos restrito)')
 param allowedNetworkRules array = []
 
-// 1. Storage Account
+// 1. Criar ou atualizar a Storage Account
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: storageAccountName
   location: location
@@ -65,11 +58,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   properties: {
     accessTier: accessTier
     supportsHttpsTrafficOnly: allowHttpsTrafficOnly
-    isVersioningEnabled: enableBlobVersioning
-    deleteRetentionPolicy: {
-      enabled: blobSoftDeleteDays > 0
-      days: blobSoftDeleteDays > 0 ? blobSoftDeleteDays : 0
-    }
     networkAcls: {
       defaultAction: defaultAction
       bypass: 'AzureServices'
@@ -80,25 +68,39 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
       ]
       virtualNetworkRules: []
     }
+    // Outras propriedades permitidas podem ser adicionadas aqui, se necessário
   }
 }
 
-// 2. Blob service
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = {
+// 2. Configurar versioning e soft delete via recurso filho blobServices, se solicitado
+//    Este recurso sempre existe, mas só aplicamos se algum parâmetro ativo
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = if (enableBlobVersioning || blobSoftDeleteDays > 0) {
   name: 'default'
   parent: storageAccount
+  properties: {
+    isVersioningEnabled: enableBlobVersioning
+    deleteRetentionPolicy: {
+      enabled: blobSoftDeleteDays > 0
+      days: blobSoftDeleteDays > 0 ? blobSoftDeleteDays : 0
+    }
+  }
 }
 
-// 3. Container
+// 3. Criar o container (child resource)
+@minLength(3)
+@maxLength(63)
+@description('Nome do Blob Container (entre 3 e 63 caracteres; minúsculas, dígitos e traços permitidos).')
+param containerName string
+
 resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
   name: containerName
-  parent: blobService
+  parent: storageAccount::blobServices('default')
   properties: {
     publicAccess: 'None'
   }
 }
 
-// Outputs
+// Outputs úteis
 output storageAccountId string = storageAccount.id
 output storageAccountEndpoints object = {
   blob: storageAccount.properties.primaryEndpoints.blob
