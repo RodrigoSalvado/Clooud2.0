@@ -31,15 +31,9 @@ param isLinux bool = true
 resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: planName
   location: location
-  sku: {
-    tier: skuTier
-    name: skuName
-    capacity: capacity
-  }
+  sku: { tier: skuTier; name: skuName; capacity: capacity }
   kind: isLinux ? 'linux' : 'app'
-  properties: {
-    reserved: isLinux
-  }
+  properties: { reserved: isLinux }
 }
 
 output appServicePlanId string = appServicePlan.id

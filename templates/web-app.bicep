@@ -28,9 +28,9 @@ param containerRegistryPassword string = ''
 @description('Opcional: SAS token para o container de Storage, sem "?" inicial. Se usar Managed Identity, podes passar vazio.')
 param containerSasToken string = ''
 
-@minLength(1)
-@maxLength(40)
-@description('Nome da Storage Account usada no Private Endpoint, ex.: "miniprojetostorage20". Necessário se quiser montar URL completa ou usar Managed Identity.')
+@minLength(3)
+@maxLength(24)
+@description('Nome da Storage Account usada no Private Endpoint ou para montar URL completa, ex.: "miniprojetostorage20".')
 param storageAccountName string = 'miniprojetostorage20'
 
 @minLength(3)
@@ -48,12 +48,8 @@ param vnetName string = 'myVNet'
 @description('Nome da subnet privada na VNet para VNet Integration (Regional).')
 param subnetName string = 'private-subnet'
 
-// Referenciar App Service Plan existente
-resource existingPlan 'Microsoft.Web/serverfarms@2022-03-01' existing = {
-  name: planName
-}
+resource existingPlan 'Microsoft.Web/serverfarms@2022-03-01' existing = { name: planName }
 
-// Cria ou atualiza o Web App
 resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
   location: location
@@ -63,104 +59,45 @@ resource webApp 'Microsoft.Web/sites@2022-03-01' = {
     siteConfig: {
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
-      appSettings: [
-        // Docker registry privado, se necessário
-        if (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') {
-          {
-            name: 'DOCKER_REGISTRY_SERVER_URL'
-            value: containerRegistryUrl
-          }
-        }
-        if (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') {
-          {
-            name: 'DOCKER_REGISTRY_SERVER_USERNAME'
-            value: containerRegistryUsername
-          }
-        }
-        if (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') {
-          {
-            name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
-            value: containerRegistryPassword
-          }
-        }
-        // Porta do Flask
-        {
-          name: 'WEBSITES_PORT'
-          value: '5000'
-        }
-        // SAS token, se estiver a usar SAS
-        if (containerSasToken != '') {
-          {
-            name: 'CONTAINER_SAS_TOKEN'
-            value: containerSasToken
-          }
-        }
-        // URL completa do container com SAS (se for o caso e containerSasToken fornecido)
-        if (containerSasToken != '') {
-          {
-            name: 'CONTAINER_URL_WITH_SAS'
-            value: 'https://${storageAccountName}.blob.core.windows.net/${containerName}?${containerSasToken}'
-          }
-        }
-        // Se quiseres usar Managed Identity em vez de SAS, podes definir uma App Setting que informe o código para usar AD.
-        // Por exemplo:
-        // {
-        //   name: 'USE_MANAGED_IDENTITY'
-        //   value: 'true'
-        // }
-        // E no código Flask, usa DefaultAzureCredential para aceder à Storage via Private Endpoint.
-      ]
+      appSettings: concat(
+        (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') ? [
+          { name: 'DOCKER_REGISTRY_SERVER_URL'; value: containerRegistryUrl }
+          { name: 'DOCKER_REGISTRY_SERVER_USERNAME'; value: containerRegistryUsername }
+          { name: 'DOCKER_REGISTRY_SERVER_PASSWORD'; value: containerRegistryPassword }
+        ] : [],
+        [ { name: 'WEBSITES_PORT'; value: '5000' } ],
+        (containerSasToken != '') ? [ { name: 'CONTAINER_SAS_TOKEN'; value: containerSasToken } ] : [],
+        (containerSasToken != '') ? [ { name: 'CONTAINER_URL_WITH_SAS'; value: 'https://${storageAccountName}.blob${environment().suffixes.storage}/${containerName}?${containerSasToken}' } ] : []
+      )
     }
   }
-  dependsOn: [
-    existingPlan
-  ]
+  dependsOn: [ existingPlan ]
 }
 
-// 2. VNet Integration (Regional) para que o Web App possa aceder ao Storage via Private Endpoint
-//    A subnet especificada deve estar livre para VNet Integration (sem delegação de outro serviço).
 resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-01' = {
-  name: '${webApp.name}/${subnetName}'
+  parent: webApp
+  name: subnetName
   properties: {
-    subnetResourceId: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, subnetName)
+    vnetResourceId: resourceId('Microsoft.Network/virtualNetworks', vnetName)
   }
-  dependsOn: [
-    webApp
-  ]
 }
 
-// 3. (Opcional) Habilitar Managed Identity no Web App para aceder ao Storage sem SAS
-resource webAppIdentity 'Microsoft.Web/sites@2022-03-01' existing = {
+resource assignIdentity 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
+  properties: { identity: { type: 'SystemAssigned' } }
+  dependsOn: [ webApp ]
 }
-resource updateIdentity 'Microsoft.Web/sites@2022-03-01' = if (true) {
-  name: webAppName
+
+resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
+  name: guid(storageAccountName, 'StorageBlobDataContributor', webApp.identity.principalId)
   properties: {
-    identity: {
-      type: 'SystemAssigned'
-    }
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    principalId: webApp.identity.principalId
+    principalType: 'ServicePrincipal'
+    scope: resourceId('Microsoft.Storage/storageAccounts', storageAccountName)
   }
-  dependsOn: [
-    webApp
-  ]
+  dependsOn: [ assignIdentity ]
 }
 
-// Nota: Para usar Managed Identity, deves atribuir à identidade gerida do Web App a role "Storage Blob Data Contributor"
-// no âmbito da Storage Account. Isso pode ser feito num outro passo (CLI) ou manualmente no portal, ou via Bicep:
-// Por exemplo:
-// resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
-//   name: guid(storageAccount.id, 'StorageBlobDataContributor', webApp.identity.principalId)
-//   properties: {
-//     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe') // Storage Blob Data Contributor
-//     principalId: webApp.identity.principalId
-//     principalType: 'ServicePrincipal'
-//     scope: storageAccount.id
-//   }
-//   dependsOn: [
-//     updateIdentity
-//   ]
-// }
-
-// Outputs
 output webAppDefaultHostName string = webApp.properties.defaultHostName
 output webAppResourceId string = webApp.id

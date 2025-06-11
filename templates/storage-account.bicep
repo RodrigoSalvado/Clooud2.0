@@ -54,9 +54,7 @@ param containerName string
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: storageAccountName
   location: location
-  sku: {
-    name: skuName
-  }
+  sku: { name: skuName }
   kind: kind
   properties: {
     accessTier: accessTier
@@ -64,11 +62,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
     networkAcls: {
       defaultAction: defaultAction
       bypass: 'AzureServices'
-      ipRules: [
-        for rule in allowedNetworkRules: {
-          value: rule
-        }
-      ]
+      ipRules: [ for rule in allowedNetworkRules: { value: rule } ]
       virtualNetworkRules: []
     }
   }
@@ -86,7 +80,6 @@ resource blobServiceUpdate 'Microsoft.Storage/storageAccounts/blobServices@2021-
   }
 }
 
-// Para criar o container privado
 resource blobServiceExisting 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' existing = {
   name: 'default'
   parent: storageAccount
@@ -95,9 +88,7 @@ resource blobServiceExisting 'Microsoft.Storage/storageAccounts/blobServices@202
 resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
   name: containerName
   parent: blobServiceExisting
-  properties: {
-    publicAccess: 'None'
-  }
+  properties: { publicAccess: 'None' }
 }
 
 output storageAccountId string = storageAccount.id

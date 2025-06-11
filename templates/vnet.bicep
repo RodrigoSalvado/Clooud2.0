@@ -29,7 +29,6 @@ param publicSubnetName string = 'public-subnet'
 @description('Prefixo CIDR da subnet pública. Ex.: "10.0.2.0/24".')
 param publicSubnetPrefix string = '10.0.2.0/24'
 
-// NSG para a subnet privada: bloqueia inbound da Internet, permite tráfego interno e saída.
 resource nsgPrivate 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
   name: '${vnetName}-${privateSubnetName}-nsg'
   location: location
@@ -78,7 +77,6 @@ resource nsgPrivate 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
   }
 }
 
-// NSG para a subnet pública: permite inbound HTTP/HTTPS/SSH da Internet, tráfego interno e saída.
 resource nsgPublic 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
   name: '${vnetName}-${publicSubnetName}-nsg'
   location: location
@@ -153,33 +151,26 @@ resource nsgPublic 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
   }
 }
 
-// Virtual Network com duas subnets
 resource virtualNetwork 'Microsoft.Network/virtualNetworks@2022-09-01' = {
   name: vnetName
   location: location
   properties: {
     addressSpace: {
-      addressPrefixes: [
-        addressPrefix
-      ]
+      addressPrefixes: [ addressPrefix ]
     }
     subnets: [
       {
         name: privateSubnetName
         properties: {
           addressPrefix: privateSubnetPrefix
-          networkSecurityGroup: {
-            id: nsgPrivate.id
-          }
+          networkSecurityGroup: { id: nsgPrivate.id }
         }
       }
       {
         name: publicSubnetName
         properties: {
           addressPrefix: publicSubnetPrefix
-          networkSecurityGroup: {
-            id: nsgPublic.id
-          }
+          networkSecurityGroup: { id: nsgPublic.id }
         }
       }
     ]
