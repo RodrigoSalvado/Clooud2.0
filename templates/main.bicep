@@ -260,7 +260,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
     networkAcls: {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
-      // Sem virtualNetworkRules: usando Private Endpoint
       ipRules: []
     }
   }
@@ -399,7 +398,6 @@ resource webApp 'Microsoft.Web/sites@2022-03-01' = {
 resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-01' = if (!skipVnetIntegration) {
   name: privateSubnetName
   parent: webApp
-  location: resourceGroup().location
   properties: {
     vnetResourceId: resourceId('Microsoft.Network/virtualNetworks', vnetName)
   }
