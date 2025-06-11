@@ -38,7 +38,7 @@ param allowHttpsTrafficOnly bool = true
 @description('Habilitar versioning em blobs? Se true, configuramos via child resource blobServices.')
 param enableBlobVersioning bool = false
 
-@description('Número de dias para soft delete de blobs. Se 0 ou negativo, não configuramos soft delete.')
+@description('Número de dias para soft delete de blobs. Se <= 0, não configuramos soft delete.')
 param blobSoftDeleteDays int = 0
 
 @description('DefaultAction para network rules: Allow ou Deny')
@@ -77,8 +77,8 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   }
 }
 
-// 2. Configurar versioning e soft delete via recurso filho blobServices, se solicitado
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = if (enableBlobVersioning || blobSoftDeleteDays > 0) {
+// 2. Atualizar versioning/soft delete via recurso filho blobServices, se solicitado
+resource blobServiceUpdate 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = if (enableBlobVersioning || blobSoftDeleteDays > 0) {
   name: 'default'
   parent: storageAccount
   properties: {
@@ -90,15 +90,19 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01'
   }
 }
 
-// 3. Criar o container como child resource de storageAccount
-//    Usamos name = 'default/${containerName}' e parent = storageAccount
-resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
-  name: 'default/${containerName}'
+// 3. Declarar referência existente a blobServices para usar como parent do container
+resource blobServiceExisting 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' existing = {
+  name: 'default'
   parent: storageAccount
+}
+
+// 4. Criar o container como child resource de blobServiceExisting
+resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
+  name: containerName
+  parent: blobServiceExisting
   properties: {
     publicAccess: 'None'
   }
-  // Dependência implícita em storageAccount; se blobService existir, o Azure aplica as configurações de versioning/soft delete antes
 }
 
 // Outputs úteis
