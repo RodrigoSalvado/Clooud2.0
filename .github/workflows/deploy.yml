@@ -1,10 +1,9 @@
-name: Deploy Bicep Individualizado em France Central
+name: Deploy Bicep Individualizado
 
 on:
   push:
     branches:
       - main
-      - master
 
 permissions:
   id-token: write
@@ -19,61 +18,45 @@ jobs:
       COSMOS_THROUGHPUT: '400'
 
     steps:
-      - name: Checkout do repositório
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Login no Azure com Login v2 (OIDC)
+      - name: Login no Azure via OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Mostrar contexto Azure
-        run: az account show
+      - name: Instalar jq
+        run: |
+          if ! command -v jq &>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
 
-      # 4. Verificar/CRIAR RG (elimina se existir noutra região)
-      - name: Verificar e (re)criar Resource Group, eliminando se existir noutra região
+      - name: Verificar/(Re)criar RG em francecentral
         run: |
           RG="MiniProjetoCloud2.0"
           TARGET_LOCATION="francecentral"
-
-          # Verifica existência
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
-            echo "Resource Group '$RG' não existe. A criar em $TARGET_LOCATION..."
             az group create --name "$RG" --location "$TARGET_LOCATION"
           else
             CURRENT_LOCATION=$(echo "$EXISTE_RG_JSON" | jq -r '.location')
-            echo "Resource Group '$RG' já existe em localização: $CURRENT_LOCATION"
             if [ "$CURRENT_LOCATION" != "$TARGET_LOCATION" ]; then
-              echo "O RG existe noutra região ($CURRENT_LOCATION). Iremos eliminar e recriar em $TARGET_LOCATION."
               az group delete --name "$RG" --yes --no-wait
-              echo "A aguardar a remoção do Resource Group '$RG'..."
+              echo "A aguardar remoção do RG..."
               for i in {1..60}; do
-                if ! az group show --name "$RG" &>/dev/null; then
-                  echo "Resource Group '$RG' removido."
-                  break
-                fi
-                echo "Ainda existe. A aguardar... ($i/60)"
+                if ! az group show --name "$RG" &>/dev/null; then break; fi
                 sleep 5
               done
-              echo "A criar Resource Group '$RG' em $TARGET_LOCATION..."
               az group create --name "$RG" --location "$TARGET_LOCATION"
             else
-              echo "Resource Group já existe em $TARGET_LOCATION. Não é necessário criar."
-              # Se quiseres aplicar template ARM ao RG existente, faz aqui com name único:
-              # DEPLOY_NAME="rgDeploy-$(date +%Y%m%d%H%M%S)"
-              # az deployment sub create \
-              #   --name "$DEPLOY_NAME" \
-              #   --location "$TARGET_LOCATION" \
-              #   --template-file templates/resource-group.bicep \
-              #   --parameters rgName="$RG" location="$TARGET_LOCATION"
+              echo "RG já existe em $TARGET_LOCATION."
             fi
           fi
 
-      # 5. Validar todos os templates Bicep localmente
-      - name: Validar todos os templates Bicep localmente
+      - name: Validar Bicep localmente
         run: |
           az bicep install || true
           az bicep build --file templates/resource-group.bicep
@@ -82,7 +65,6 @@ jobs:
           az bicep build --file templates/app-service-plan.bicep
           az bicep build --file templates/web-app.bicep
 
-      # 6. Deploy Storage Account + Container
       - name: Deploy Storage Account + Container
         uses: azure/cli@v1
         with:
@@ -96,83 +78,59 @@ jobs:
                 enableBlobVersioning=true \
                 blobSoftDeleteDays=7
 
-      # 7. Instalar jq (para parsing JSON)
-      - name: Instalar jq (para parsing JSON)
-        run: |
-          if ! command -v jq &>/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
-
-      # 8. Deploy Cosmos DB com fallback
-      - name: Deploy Cosmos DB NoSQL (SQL API) - Fallback
+      - name: Deploy CosmosDB (fallback)
         uses: azure/cli@v1
         with:
           inlineScript: |
             if [ -z "${COSMOS_ACCOUNT_NAME}" ]; then
-              echo "Pular criação do Cosmos DB pois COSMOS_ACCOUNT_NAME está vazio."
+              echo "Pular Cosmos DB."
               exit 0
             fi
-
             COSMOS_PRIMARY_LOCATION='francecentral'
             COSMOS_FALLBACK_LOCATIONS='westeurope northeurope eastus uksouth'
-
             LOCATIONS_TO_TRY=("$COSMOS_PRIMARY_LOCATION")
-            for loc in $COSMOS_FALLBACK_LOCATIONS; do
-              LOCATIONS_TO_TRY+=("$loc")
-            done
-
+            for loc in $COSMOS_FALLBACK_LOCATIONS; do LOCATIONS_TO_TRY+=("$loc"); done
             RG="MiniProjetoCloud2.0"
             ACCOUNT_NAME="${COSMOS_ACCOUNT_NAME}"
             SUCCESS=false
-
             for region in "${LOCATIONS_TO_TRY[@]}"; do
-              echo "=== Tentando Cosmos DB '${ACCOUNT_NAME}' em região: $region ==="
-              EXISTE_JSON=$(az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" -o json 2>/dev/null || echo "")
-              if [ -n "$EXISTE_JSON" ]; then
-                PROV_STATE=$(echo "$EXISTE_JSON" | jq -r '.properties.provisioningState // empty')
-                echo "Estado existente: $PROV_STATE"
-                if [ "$PROV_STATE" != "Succeeded" ]; then
-                  echo "Eliminando instância com estado $PROV_STATE antes de recriar..."
+              echo "Tentando Cosmos DB em $region..."
+              EXISTE=$(az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" -o json 2>/dev/null || echo "")
+              if [ -n "$EXISTE" ]; then
+                STATE=$(echo "$EXISTE" | jq -r '.properties.provisioningState // ""')
+                if [ "$STATE" != "Succeeded" ]; then
                   az cosmosdb delete --name "$ACCOUNT_NAME" --resource-group "$RG" --yes
                   for i in {1..30}; do
                     sleep 5
-                    if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
-                      echo "Removido."
-                      break
-                    fi
-                    echo "Aguardando remoção... ($i)"
+                    if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then break; fi
                   done
                 else
-                  echo "Instância já existe e está Succeeded; vamos atualizar nesta mesma região."
+                  echo "Atualizar existente bem-sucedido em $region"
                 fi
               fi
-
               if az deployment group create \
                   --resource-group "$RG" \
                   --template-file templates/cosmosdb.bicep \
                   --parameters \
-                    cosmosAccountName="${ACCOUNT_NAME}" \
+                    cosmosAccountName="$ACCOUNT_NAME" \
                     cosmosLocation="$region" \
                     cosmosDatabaseName='RedditApp' \
                     cosmosContainerName='posts' \
                     cosmosPartitionKeyPath='/id' \
                     cosmosThroughput=${COSMOS_THROUGHPUT} \
                   --only-show-errors; then
-                echo "Cosmos DB OK em $region"
+                echo "Cosmos OK em $region"
                 SUCCESS=true
                 break
               else
-                echo "Falha em $region. A tentar próxima..."
+                echo "Falhou em $region. A tentar próxima..."
               fi
             done
-
             if [ "$SUCCESS" != "true" ]; then
-              echo "❌ Falha em criar Cosmos DB em todas as regiões: ${LOCATIONS_TO_TRY[*]}"
+              echo "Falha em todas regiões: ${LOCATIONS_TO_TRY[*]}"
               exit 1
             fi
 
-      # 9. Deploy App Service Plan
       - name: Deploy App Service Plan
         uses: azure/cli@v1
         with:
@@ -187,10 +145,9 @@ jobs:
                 capacity=1 \
                 isLinux=true
 
-      # 10. Gerar SAS token para Storage (opcional)
-      - name: Gerar SAS token para Storage (opcional)
-        uses: azure/cli@v1
+      - name: Gerar SAS token Storage (opcional)
         id: gen_sas
+        uses: azure/cli@v1
         with:
           inlineScript: |
             ACCOUNT_NAME="miniprojetostorage20"
@@ -207,15 +164,12 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      # 11. Deploy Web App
       - name: Deploy Web App
         uses: azure/cli@v1
         with:
           inlineScript: |
             TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
-            if [ -z "$TOKEN" ]; then
-              TOKEN=""
-            fi
+            [ -z "$TOKEN" ] && TOKEN=""
             az deployment group create \
               --resource-group MiniProjetoCloud2.0 \
               --template-file templates/web-app.bicep \
@@ -228,43 +182,26 @@ jobs:
                 containerName='reddit-posts' \
                 containerRegistryUrl='' \
                 containerRegistryUsername='' \
-                containerRegistryPassword='' \
-                createRoleAssignment=false
+                containerRegistryPassword=''
 
-      # 12. Atribuir role ao Web App sobre Storage (opcional)
-      - name: Atribuir role ao Web App sobre Storage (opcional)
+      - name: Atribuir role Storage ao Web App (opcional)
         if: ${{ always() }}
         run: |
           RG="MiniProjetoCloud2.0"
           WEBAPP_NAME="minhaapp-rodrig0salv"
           STORAGE_NAME="miniprojetostorage20"
-
           PRINCIPAL_ID=$(az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" --query identity.principalId -o tsv)
-          if [ -z "$PRINCIPAL_ID" ] || [ "$PRINCIPAL_ID" == "null" ]; then
-            echo "Não obtive principalId do Web App. Verifica se identity está configurado."
-            exit 1
+          if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
+            SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+            az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$SCOPE" || echo "Pode já existir."
+          else
+            echo "Web App não tem identity configurada ou não existe ainda."
           fi
 
-          STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
-          if [ -z "$STORAGE_SCOPE" ]; then
-            echo "Não obtive o resource id da Storage Account."
-            exit 1
-          fi
-
-          echo "Atribuir role 'Storage Blob Data Contributor' ao Web App sobre a Storage Account..."
-          az role assignment create \
-            --assignee-object-id "$PRINCIPAL_ID" \
-            --role "Storage Blob Data Contributor" \
-            --scope "$STORAGE_SCOPE"
-
-      # 13. Mostrar outputs finais
-      - name: Mostrar outputs do deploy
+      - name: Mostrar outputs
         uses: azure/cli@v1
         with:
           inlineScript: |
             DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)
-            echo "Deployment name: $DEPLOY_NAME"
-            az deployment group show \
-              --resource-group MiniProjetoCloud2.0 \
-              --name "$DEPLOY_NAME" \
-              --query properties.outputs
+            echo "Deployment: $DEPLOY_NAME"
+            az deployment group show --resource-group MiniProjetoCloud2.0 --name "$DEPLOY_NAME" --query properties.outputs
