@@ -23,6 +23,9 @@ param blobSoftDeleteDays int = 7
 @description('Nome da Cosmos DB account. Se vazio, não cria Cosmos.')
 param cosmosAccountName string = ''
 
+@description('Localização para a Cosmos DB. Padrão é a localização do resource group, mas para evitar falhas por alta procura podes usar outra região, ex: eastus.')
+param cosmosLocation string = resourceGroup().location
+
 @minLength(1)
 @maxLength(255)
 @description('Nome da base de dados NoSQL em Cosmos. Se vazio, não cria base.')
@@ -129,13 +132,13 @@ resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/container
 // 2. Cosmos DB Account (SQL API) se definido
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (cosmosAccountName != '') {
   name: cosmosAccountName
-  location: resourceGroup().location
+  location: cosmosLocation
   kind: 'GlobalDocumentDB'
   properties: {
     databaseAccountOfferType: 'Standard'
     locations: [
       {
-        locationName: resourceGroup().location
+        locationName: cosmosLocation
         failoverPriority: 0
         isZoneRedundant: false
       }

@@ -12,12 +12,12 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
-      # Supondo que guardaste o nome da Cosmos Account em secrets
-      COSMOS_ACCOUNT_NAME: 'cosmosprojeto'
-      # Podes igualmente guardar throughput ou outros parâmetros em secrets ou variáveis de repositório
+      # Nome da Cosmos Account (poderá vir de secrets ou variáveis do repositório)
+      COSMOS_ACCOUNT_NAME: cosmosprojeto
+      # Throughput para Cosmos DB
       COSMOS_THROUGHPUT: '400'
 
     steps:
@@ -33,7 +33,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # 3. Mostrar contexto Azure (subscrição ativa)
+      # 3. Mostrar contexto Azure
       - name: Mostrar contexto Azure
         run: az account show
 
@@ -55,22 +55,22 @@ jobs:
             --resource-group MiniProjetoCloud2.0 \
             --template-file templates/main.bicep \
             --parameters \
-              storageAccountName='miniprojetostorage20' \
-              containerName='reddit-posts' \
+              storageAccountName=miniProjetostorage20 \
+              containerName=reddit-posts \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
               cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
-              cosmosDatabaseName='RedditApp' \
-              cosmosContainerName='posts' \
-              cosmosPartitionKeyPath='/id' \
+              cosmosDatabaseName=RedditApp \
+              cosmosContainerName=posts \
+              cosmosPartitionKeyPath=/id \
               cosmosThroughput=${COSMOS_THROUGHPUT} \
-              planName='ASP-MiniProjetoCloud2.0' \
-              skuTier='Basic' \
-              skuName='B2' \
+              planName=ASP-MiniProjetoCloud2.0 \
+              skuTier=Basic \
+              skuName=B2 \
               capacity=1 \
               isLinux=true \
-              webAppName='minhaapp-rodrig0salv' \
-              imageName='rodrig0salv/minha-app:latest' \
+              webAppName=minhaapp-rodrig0salv \
+              imageName=rodrig0salv/minha-app:latest \
               containerSasToken='' \
               containerRegistryUrl='' \
               containerRegistryUsername='' \
@@ -87,22 +87,22 @@ jobs:
             --resource-group MiniProjetoCloud2.0 \
             --template-file templates/main.bicep \
             --parameters \
-              storageAccountName='miniprojetostorage20' \
-              containerName='reddit-posts' \
+              storageAccountName=miniProjetostorage20 \
+              containerName=reddit-posts \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
               cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
-              cosmosDatabaseName='RedditApp' \
-              cosmosContainerName='posts' \
-              cosmosPartitionKeyPath='/id' \
+              cosmosDatabaseName=RedditApp \
+              cosmosContainerName=posts \
+              cosmosPartitionKeyPath=/id \
               cosmosThroughput=${COSMOS_THROUGHPUT} \
-              planName='ASP-MiniProjetoCloud2.0' \
-              skuTier='Basic' \
-              skuName='B2' \
+              planName=ASP-MiniProjetoCloud2.0 \
+              skuTier=Basic \
+              skuName=B2 \
               capacity=1 \
               isLinux=true \
-              webAppName='minhaapp-rodrig0salv' \
-              imageName='rodrig0salv/minha-app:latest' \
+              webAppName=minhaapp-rodrig0salv \
+              imageName=rodrig0salv/minha-app:latest \
               containerSasToken='' \
               containerRegistryUrl='' \
               containerRegistryUsername='' \
