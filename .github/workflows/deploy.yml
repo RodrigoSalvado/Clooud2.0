@@ -1,0 +1,29 @@
+name: Deploy Bicep to Azure
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Login no Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Bicep para Azure
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            az deployment sub create \
+              --location westeurope \
+              --template-file templates/resource-group.bicep \
+              --parameters rgName='MiniProjetoCloud2.0' location='westeurope'
