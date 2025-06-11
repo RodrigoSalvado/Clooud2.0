@@ -1,4 +1,4 @@
-name: Deploy Bicep Unificado sem VNet
+name: Deploy Bicep Unificado sem VNet (com Cosmos DB)
 
 on:
   push:
@@ -13,6 +13,12 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
+    env:
+      # Supondo que guardaste o nome da Cosmos Account em secrets
+      COSMOS_ACCOUNT_NAME: ${{ secrets.COSMOS_ACCOUNT_NAME }}
+      # Podes igualmente guardar throughput ou outros parâmetros em secrets ou variáveis de repositório
+      COSMOS_THROUGHPUT: '400'
 
     steps:
       # 1. Checkout do repositório
@@ -53,6 +59,11 @@ jobs:
               containerName='reddit-posts' \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
+              cosmosAccountName='${{ env.COSMOS_ACCOUNT_NAME }}' \
+              cosmosDatabaseName='RedditApp' \
+              cosmosContainerName='posts' \
+              cosmosPartitionKeyPath='/id' \
+              cosmosThroughput=${{ env.COSMOS_THROUGHPUT }} \
               planName='ASP-MiniProjetoCloud2.0' \
               skuTier='Basic' \
               skuName='B2' \
@@ -80,6 +91,11 @@ jobs:
               containerName='reddit-posts' \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
+              cosmosAccountName='${COSMOS_ACCOUNT_NAME}' \
+              cosmosDatabaseName='RedditApp' \
+              cosmosContainerName='posts' \
+              cosmosPartitionKeyPath='/id' \
+              cosmosThroughput=${COSMOS_THROUGHPUT} \
               planName='ASP-MiniProjetoCloud2.0' \
               skuTier='Basic' \
               skuName='B2' \
