@@ -19,11 +19,9 @@ jobs:
       COSMOS_THROUGHPUT: '400'
 
     steps:
-      # 1. Checkout
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
-      # 2. Login no Azure
       - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
@@ -31,50 +29,52 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # 3. Mostrar contexto
       - name: Mostrar contexto Azure
         run: az account show
 
-      # 4. Check/Create Resource Group
-      - name: Verificar e criar Resource Group se não existir
+      # 4. Verificar/CRIAR RG (elimina se existir noutra região)
+      - name: Verificar e (re)criar Resource Group, eliminando se existir noutra região
         run: |
           RG="MiniProjetoCloud2.0"
-          LOCATION="francecentral"
+          TARGET_LOCATION="francecentral"
+
           # Verifica existência
-          if az group show --name "$RG" &>/dev/null; then
-            echo "Resource Group '$RG' já existe."
+          EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
+          if [ -z "$EXISTE_RG_JSON" ]; then
+            echo "Resource Group '$RG' não existe. A criar em $TARGET_LOCATION..."
+            az group create --name "$RG" --location "$TARGET_LOCATION"
           else
-            echo "Resource Group '$RG' não existe. A criar em $LOCATION..."
-            az group create --name "$RG" --location "$LOCATION"
+            CURRENT_LOCATION=$(echo "$EXISTE_RG_JSON" | jq -r '.location')
+            echo "Resource Group '$RG' já existe em localização: $CURRENT_LOCATION"
+            if [ "$CURRENT_LOCATION" != "$TARGET_LOCATION" ]; then
+              echo "O RG existe noutra região ($CURRENT_LOCATION). Iremos eliminar e recriar em $TARGET_LOCATION."
+              az group delete --name "$RG" --yes --no-wait
+              echo "A aguardar a remoção do Resource Group '$RG'..."
+              for i in {1..60}; do
+                if ! az group show --name "$RG" &>/dev/null; then
+                  echo "Resource Group '$RG' removido."
+                  break
+                fi
+                echo "Ainda existe. A aguardar... ($i/60)"
+                sleep 5
+              done
+              echo "A criar Resource Group '$RG' em $TARGET_LOCATION..."
+              az group create --name "$RG" --location "$TARGET_LOCATION"
+            else
+              echo "Resource Group já existe em $TARGET_LOCATION. Não é necessário criar."
+              # Se quiseres aplicar template ARM ao RG existente, faz aqui com name único:
+              # DEPLOY_NAME="rgDeploy-$(date +%Y%m%d%H%M%S)"
+              # az deployment sub create \
+              #   --name "$DEPLOY_NAME" \
+              #   --location "$TARGET_LOCATION" \
+              #   --template-file templates/resource-group.bicep \
+              #   --parameters rgName="$RG" location="$TARGET_LOCATION"
+            fi
           fi
 
-      # 5. What-If do template de Resource Group (opcional)
-      - name: What-If Deploy Resource Group (opcional)
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            LOCATION="francecentral"
-            az deployment sub what-if \
-              --location $LOCATION \
-              --template-file templates/resource-group.bicep \
-              --parameters rgName='MiniProjetoCloud2.0' location=$LOCATION \
-              --only-show-errors
-
-      # 6. Deploy Resource Group em France Central
-      - name: Deploy Resource Group em France Central
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            LOCATION="francecentral"
-            az deployment sub create \
-              --location $LOCATION \
-              --template-file templates/resource-group.bicep \
-              --parameters rgName='MiniProjetoCloud2.0' location=$LOCATION
-
-      # 7. Validar todos os templates Bicep localmente (runner Ubuntu)
-      - name: Validar todos os templates Bicep
+      # 5. Validar todos os templates Bicep localmente
+      - name: Validar todos os templates Bicep localmente
         run: |
-          # Instala Bicep CLI localmente se quiseres (normalmente já instalado no runner)
           az bicep install || true
           az bicep build --file templates/resource-group.bicep
           az bicep build --file templates/storage-account.bicep
@@ -82,7 +82,7 @@ jobs:
           az bicep build --file templates/app-service-plan.bicep
           az bicep build --file templates/web-app.bicep
 
-      # 8. Deploy Storage Account + Container
+      # 6. Deploy Storage Account + Container
       - name: Deploy Storage Account + Container
         uses: azure/cli@v1
         with:
@@ -96,7 +96,7 @@ jobs:
                 enableBlobVersioning=true \
                 blobSoftDeleteDays=7
 
-      # 9. Instalar jq (para parsing JSON)
+      # 7. Instalar jq (para parsing JSON)
       - name: Instalar jq (para parsing JSON)
         run: |
           if ! command -v jq &>/dev/null; then
@@ -104,7 +104,7 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      # 10. Deploy Cosmos DB com fallback e remoção de instância falhada
+      # 8. Deploy Cosmos DB com fallback
       - name: Deploy Cosmos DB NoSQL (SQL API) - Fallback
         uses: azure/cli@v1
         with:
@@ -115,10 +115,8 @@ jobs:
             fi
 
             COSMOS_PRIMARY_LOCATION='francecentral'
-            # Acrescenta regiões de fallback conforme necessário
             COSMOS_FALLBACK_LOCATIONS='westeurope northeurope eastus uksouth'
 
-            # Lista de tentativas: primeiro primary, depois fallback
             LOCATIONS_TO_TRY=("$COSMOS_PRIMARY_LOCATION")
             for loc in $COSMOS_FALLBACK_LOCATIONS; do
               LOCATIONS_TO_TRY+=("$loc")
@@ -130,7 +128,6 @@ jobs:
 
             for region in "${LOCATIONS_TO_TRY[@]}"; do
               echo "=== Tentando Cosmos DB '${ACCOUNT_NAME}' em região: $region ==="
-              # Verificar se existe e estado
               EXISTE_JSON=$(az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" -o json 2>/dev/null || echo "")
               if [ -n "$EXISTE_JSON" ]; then
                 PROV_STATE=$(echo "$EXISTE_JSON" | jq -r '.properties.provisioningState // empty')
@@ -138,7 +135,6 @@ jobs:
                 if [ "$PROV_STATE" != "Succeeded" ]; then
                   echo "Eliminando instância com estado $PROV_STATE antes de recriar..."
                   az cosmosdb delete --name "$ACCOUNT_NAME" --resource-group "$RG" --yes
-                  # Aguardar remoção
                   for i in {1..30}; do
                     sleep 5
                     if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
@@ -176,7 +172,7 @@ jobs:
               exit 1
             fi
 
-      # 11. Deploy App Service Plan
+      # 9. Deploy App Service Plan
       - name: Deploy App Service Plan
         uses: azure/cli@v1
         with:
@@ -191,7 +187,7 @@ jobs:
                 capacity=1 \
                 isLinux=true
 
-      # 12. Gerar SAS token para Storage (opcional)
+      # 10. Gerar SAS token para Storage (opcional)
       - name: Gerar SAS token para Storage (opcional)
         uses: azure/cli@v1
         id: gen_sas
@@ -211,7 +207,7 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      # 13. Deploy Web App
+      # 11. Deploy Web App
       - name: Deploy Web App
         uses: azure/cli@v1
         with:
@@ -235,7 +231,7 @@ jobs:
                 containerRegistryPassword='' \
                 createRoleAssignment=false
 
-      # 14. Atribuir role assignment (opcional, fora do Bicep)
+      # 12. Atribuir role ao Web App sobre Storage (opcional)
       - name: Atribuir role ao Web App sobre Storage (opcional)
         if: ${{ always() }}
         run: |
@@ -261,7 +257,7 @@ jobs:
             --role "Storage Blob Data Contributor" \
             --scope "$STORAGE_SCOPE"
 
-      # 15. Mostrar outputs finais
+      # 13. Mostrar outputs finais
       - name: Mostrar outputs do deploy
         uses: azure/cli@v1
         with:
