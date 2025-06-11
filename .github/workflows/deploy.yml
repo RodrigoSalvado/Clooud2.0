@@ -35,7 +35,43 @@ jobs:
       - name: Mostrar contexto Azure
         run: az account show
 
-      # 4. Validar templates Bicep localmente (runner Ubuntu)
+      # 4. Check/Create Resource Group
+      - name: Verificar e criar Resource Group se não existir
+        run: |
+          RG="MiniProjetoCloud2.0"
+          LOCATION="francecentral"
+          # Verifica existência
+          if az group show --name "$RG" &>/dev/null; then
+            echo "Resource Group '$RG' já existe."
+          else
+            echo "Resource Group '$RG' não existe. A criar em $LOCATION..."
+            az group create --name "$RG" --location "$LOCATION"
+          fi
+
+      # 5. What-If do template de Resource Group (opcional)
+      - name: What-If Deploy Resource Group (opcional)
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            LOCATION="francecentral"
+            az deployment sub what-if \
+              --location $LOCATION \
+              --template-file templates/resource-group.bicep \
+              --parameters rgName='MiniProjetoCloud2.0' location=$LOCATION \
+              --only-show-errors
+
+      # 6. Deploy Resource Group em France Central
+      - name: Deploy Resource Group em France Central
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            LOCATION="francecentral"
+            az deployment sub create \
+              --location $LOCATION \
+              --template-file templates/resource-group.bicep \
+              --parameters rgName='MiniProjetoCloud2.0' location=$LOCATION
+
+      # 7. Validar todos os templates Bicep localmente (runner Ubuntu)
       - name: Validar todos os templates Bicep
         run: |
           # Instala Bicep CLI localmente se quiseres (normalmente já instalado no runner)
@@ -46,18 +82,7 @@ jobs:
           az bicep build --file templates/app-service-plan.bicep
           az bicep build --file templates/web-app.bicep
 
-      # 5. Criar Resource Group em France Central (subscription scope)
-      - name: Deploy Resource Group em France Central
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            # Faz build local se quiseres, mas o contêiner do CLI compila automaticamente ao fazer deployment
-            az deployment sub create \
-              --location francecentral \
-              --template-file templates/resource-group.bicep \
-              --parameters rgName='MiniProjetoCloud2.0' location='francecentral'
-
-      # 6. Deploy Storage Account + Container
+      # 8. Deploy Storage Account + Container
       - name: Deploy Storage Account + Container
         uses: azure/cli@v1
         with:
@@ -71,7 +96,7 @@ jobs:
                 enableBlobVersioning=true \
                 blobSoftDeleteDays=7
 
-      # 7. Instalar jq se for preciso para Cosmos
+      # 9. Instalar jq (para parsing JSON)
       - name: Instalar jq (para parsing JSON)
         run: |
           if ! command -v jq &>/dev/null; then
@@ -79,7 +104,7 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      # 8. Deploy Cosmos DB com fallback e remoção de instância falhada
+      # 10. Deploy Cosmos DB com fallback e remoção de instância falhada
       - name: Deploy Cosmos DB NoSQL (SQL API) - Fallback
         uses: azure/cli@v1
         with:
@@ -90,8 +115,10 @@ jobs:
             fi
 
             COSMOS_PRIMARY_LOCATION='francecentral'
+            # Acrescenta regiões de fallback conforme necessário
             COSMOS_FALLBACK_LOCATIONS='westeurope northeurope eastus uksouth'
 
+            # Lista de tentativas: primeiro primary, depois fallback
             LOCATIONS_TO_TRY=("$COSMOS_PRIMARY_LOCATION")
             for loc in $COSMOS_FALLBACK_LOCATIONS; do
               LOCATIONS_TO_TRY+=("$loc")
@@ -149,7 +176,7 @@ jobs:
               exit 1
             fi
 
-      # 9. Deploy App Service Plan
+      # 11. Deploy App Service Plan
       - name: Deploy App Service Plan
         uses: azure/cli@v1
         with:
@@ -164,7 +191,7 @@ jobs:
                 capacity=1 \
                 isLinux=true
 
-      # 10. Gerar SAS token para Storage (opcional)
+      # 12. Gerar SAS token para Storage (opcional)
       - name: Gerar SAS token para Storage (opcional)
         uses: azure/cli@v1
         id: gen_sas
@@ -184,7 +211,7 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      # 11. Deploy Web App
+      # 13. Deploy Web App
       - name: Deploy Web App
         uses: azure/cli@v1
         with:
@@ -208,7 +235,7 @@ jobs:
                 containerRegistryPassword='' \
                 createRoleAssignment=false
 
-      # 12. Atribuir role assignment (opcional, fora do Bicep)
+      # 14. Atribuir role assignment (opcional, fora do Bicep)
       - name: Atribuir role ao Web App sobre Storage (opcional)
         if: ${{ always() }}
         run: |
@@ -234,7 +261,7 @@ jobs:
             --role "Storage Blob Data Contributor" \
             --scope "$STORAGE_SCOPE"
 
-      # 13. Mostrar outputs finais
+      # 15. Mostrar outputs finais
       - name: Mostrar outputs do deploy
         uses: azure/cli@v1
         with:
