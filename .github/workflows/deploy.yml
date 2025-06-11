@@ -16,6 +16,12 @@ jobs:
     env:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
+      # Nome do Application Insights (para Web App)
+      APPINSIGHTS_WEB_NAME: 'minhaapp-rodrig0salv-ai'
+      # Nome do Function App
+      FUNCTIONAPP_NAME: 'func-rodrig0salv'
+      # Application Insights para Function (se criar separado)
+      APPINSIGHTS_FUNC_NAME: 'func-rodrig0salv-ai'
 
     steps:
       - name: Checkout do repositório
@@ -65,6 +71,8 @@ jobs:
           az bicep build --file templates/cosmosdb.bicep
           az bicep build --file templates/app-service-plan.bicep
           az bicep build --file templates/web-app.bicep
+          az bicep build --file templates/app-insights.bicep
+          az bicep build --file templates/function-app.bicep
 
       - name: Deploy Storage Account + Container
         uses: azure/cli@v1
@@ -132,7 +140,7 @@ jobs:
               exit 1
             fi
 
-      - name: Deploy App Service Plan
+      - name: Deploy App Service Plan para Web App
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -178,17 +186,83 @@ jobs:
                 webAppName='minhaapp-rodrig0salv' \
                 planName='ASP-MiniProjetoCloud2.0' \
                 imageName='rodrig0salv/minha-app:latest' \
-                containerSasToken="$TOKEN" \
                 storageAccountName='miniprojetostorage20' \
                 containerName='reddit-posts' \
-                containerRegistryUrl='' \
-                containerRegistryUsername='' \
-                containerRegistryPassword=''
+                containerSasToken="$TOKEN" \
+                createAppInsights=true \
+                appInsightsName='${{ env.APPINSIGHTS_WEB_NAME }}'
 
-      - name: Mostrar outputs finais
+      - name: Deploy Application Insights para Function (caso precise criar)
         uses: azure/cli@v1
         with:
           inlineScript: |
-            DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)
-            echo "Deployment: $DEPLOY_NAME"
-            az deployment group show --resource-group MiniProjetoCloud2.0 --name "$DEPLOY_NAME" --query properties.outputs
+            # Se você quiser usar Insights existente, ajuste aqui. Por simplicidade, criamos novo se createAppInsights for true.
+            az deployment group create \
+              --resource-group MiniProjetoCloud2.0 \
+              --template-file templates/app-insights.bicep \
+              --parameters \
+                appInsightsName='${{ env.APPINSIGHTS_FUNC_NAME }}'
+
+      - name: Deploy Function App em Python
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            # Obter Instrumentation Key ou resourceId do Insights criado
+            AI_FUNC_ID=$(az deployment group show \
+              --resource-group MiniProjetoCloud2.0 \
+              --name $(az deployment group list --resource-group MiniProjetoCloud2.0 --query "[?contains(properties.templateLink.uri,'app-insights.bicep')].name" -o tsv) \
+              --query properties.outputs.appInsightsResourceId.value -o tsv || echo "")
+            # Se falhar em obter, pode montar manual ou usar variável de env
+            az deployment group create \
+              --resource-group MiniProjetoCloud2.0 \
+              --template-file templates/function-app.bicep \
+              --parameters \
+                functionAppName='${{ env.FUNCTIONAPP_NAME }}' \
+                storageAccountName='miniprojetostorage20' \
+                appInsightsResourceId="$AI_FUNC_ID" \
+                createAppInsights=false
+            # Observação: se preferir criar Insights dentro do template de Function, passe createAppInsights=true e ajuste nome via parâmetro.
+
+      - name: Atribuir role ao Web App sobre Storage (opcional)
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            RG="MiniProjetoCloud2.0"
+            WEBAPP_NAME="minhaapp-rodrig0salv"
+            STORAGE_NAME="miniprojetostorage20"
+            PRINCIPAL_ID=$(az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" --query identity.principalId -o tsv)
+            if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
+              STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+              az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
+            else
+              echo "Web App não tem identidade configurada ou não existe ainda."
+            fi
+
+      - name: Atribuir role ao Function App sobre Storage (opcional)
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            RG="MiniProjetoCloud2.0"
+            FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
+            STORAGE_NAME="miniprojetostorage20"
+            PRINCIPAL_ID=$(az functionapp show --resource-group "$RG" --name "$FUNC_NAME" --query identity.principalId -o tsv)
+            if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
+              STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+              az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
+            else
+              echo "Function App não tem identidade configurada ou não existe ainda."
+            fi
+
+      - name: Mostrar outputs finais Web + Function
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            RG="MiniProjetoCloud2.0"
+            # Web App outputs
+            DEPLOY_WEB=$(az deployment group list --resource-group $RG --query "[?contains(properties.templateLink.uri,'web-app.bicep')].name" -o tsv)
+            echo "Deployment Web App: $DEPLOY_WEB"
+            az deployment group show --resource-group $RG --name "$DEPLOY_WEB" --query properties.outputs
+            # Function App outputs
+            DEPLOY_FUNC=$(az deployment group list --resource-group $RG --query "[?contains(properties.templateLink.uri,'function-app.bicep')].name" -o tsv)
+            echo "Deployment Function App: $DEPLOY_FUNC"
+            az deployment group show --resource-group $RG --name "$DEPLOY_FUNC" --query properties.outputs
