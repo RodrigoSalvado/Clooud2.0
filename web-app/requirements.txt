@@ -1,0 +1,12 @@
+flask
+requests
+pandas
+numpy
+matplotlib
+scipy
+transformers
+torch
+wordcloud
+azure-storage-blob
+azure-cosmos
+dotenv

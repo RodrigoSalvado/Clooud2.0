@@ -1,0 +1,14 @@
+{
+  "bindings": [
+    {
+      "name": "docs",
+      "type": "cosmosDBTrigger",
+      "direction": "in",
+      "leaseCollectionName": "leases",
+      "connectionStringSetting": "CosmosDBConnection",
+      "databaseName": "RedditApp",
+      "collectionName": "posts",
+      "createLeaseCollectionIfNotExists": true
+    }
+  ]
+}
