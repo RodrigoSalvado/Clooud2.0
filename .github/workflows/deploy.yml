@@ -15,9 +15,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout do repositório
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
+      # 2. Login no Azure via OIDC
       - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
@@ -25,39 +27,56 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # 3. Mostrar contexto Azure (subscrição ativa)
       - name: Mostrar contexto Azure
         run: az account show
 
+      # 4. Validar main.bicep
       - name: Validar main.bicep
         run: |
           az bicep install || true
           az bicep build --file templates/main.bicep
 
+      # 5. Criar Resource Group se não existir
       - name: Criar Resource Group se não existir
         run: |
           az group create --name MiniProjetoCloud2.0 --location westeurope
 
+      # 6. Determinar skipVnetIntegration
       - name: Determinar skipVnetIntegration
         id: check_integration
         run: |
+          set -euxo pipefail
           RG="MiniProjetoCloud2.0"
           WEBAPP_NAME="minhaapp-rodrig0salv"
-          # Verificar se jq existe
-          if ! command -v jq &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y jq
-          fi
-          INTEGRATIONS=$(az webapp vnet-integration list \
-            --resource-group "$RG" \
-            --name "$WEBAPP_NAME" \
-            -o json)
-          if [ "$(echo "$INTEGRATIONS" | jq 'length')" -eq 0 ]; then
-            echo "Não existe integração ainda. skipVnetIntegration=false"
+
+          # Verifica se o Web App existe
+          if ! az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" &>/dev/null; then
+            echo "Web App não existe ainda. skipVnetIntegration=false"
             echo "skipVnetIntegration=false" >> $GITHUB_OUTPUT
           else
-            echo "Já existe integração. skipVnetIntegration=true"
-            echo "skipVnetIntegration=true" >> $GITHUB_OUTPUT
+            # Instala jq se necessário
+            if ! command -v jq &>/dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y jq
+            fi
+
+            # Lista integrações
+            INTEGRATIONS=$(az webapp vnet-integration list \
+              --resource-group "$RG" \
+              --name "$WEBAPP_NAME" \
+              -o json)
+
+            if [ "$(echo "$INTEGRATIONS" | jq 'length')" -eq 0 ]; then
+              echo "Não existe integração. skipVnetIntegration=false"
+              echo "skipVnetIntegration=false" >> $GITHUB_OUTPUT
+            else
+              echo "Já existe integração. skipVnetIntegration=true"
+              echo "skipVnetIntegration=true" >> $GITHUB_OUTPUT
+            fi
           fi
 
+      # 7. What-If Deploy (opcional)
       - name: What-If Deploy (opcional)
         run: |
           az deployment group what-if \
@@ -90,6 +109,7 @@ jobs:
               skipVnetIntegration=${{ steps.check_integration.outputs.skipVnetIntegration }} \
             --only-show-errors
 
+      # 8. Deploy Unificado via az CLI
       - name: Deploy Unificado via az CLI
         run: |
           set -euxo pipefail
@@ -124,6 +144,7 @@ jobs:
               skipVnetIntegration=${{ steps.check_integration.outputs.skipVnetIntegration }} \
             --only-show-errors
 
+      # 9. Mostrar outputs do deploy
       - name: Mostrar outputs do deploy
         run: |
           DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)
