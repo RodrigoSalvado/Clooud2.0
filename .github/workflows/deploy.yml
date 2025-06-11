@@ -97,6 +97,7 @@ jobs:
               containerRegistryUrl='' \
               containerRegistryUsername='' \
               containerRegistryPassword='' \
+              createRoleAssignment=false \
             --only-show-errors
 
       - name: Mostrar outputs do deploy

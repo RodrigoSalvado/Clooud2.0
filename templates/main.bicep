@@ -93,6 +93,9 @@ param containerRegistryUsername string = ''
 @description('Password do registo privado; vazio se público.')
 param containerRegistryPassword string = ''
 
+@description('Definir a true para criar Role Assignment para Managed Identity no Storage. Requer permissões Microsoft.Authorization/roleAssignments/write.')
+param createRoleAssignment bool = false
+
 // 1. NSG da subnet privada
 resource nsgPrivate 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
   name: '${vnetName}-${privateSubnetName}-nsg'
@@ -400,8 +403,8 @@ resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-
   }
 }
 
-// 9. Role Assignment para Managed Identity no Storage
-resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
+// 9. Role Assignment para Managed Identity no Storage (condicional)
+resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = if (createRoleAssignment) {
   name: guid(storageAccount.id, webAppName, 'storageBlobContributor')
   scope: storageAccount
   properties: {
