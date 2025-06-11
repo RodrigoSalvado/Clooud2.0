@@ -96,6 +96,9 @@ param containerRegistryPassword string = ''
 @description('Definir a true para criar Role Assignment para Managed Identity no Storage. Requer permissões Microsoft.Authorization/roleAssignments/write.')
 param createRoleAssignment bool = false
 
+@description('Definir a true para saltar a VNet Integration se já existir. Permite evitar conflito se já estiver integrado.')
+param skipVnetIntegration bool = false
+
 // 1. NSG da subnet privada
 resource nsgPrivate 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
   name: '${vnetName}-${privateSubnetName}-nsg'
@@ -257,7 +260,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
     networkAcls: {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
-      // Sem virtualNetworkRules para evitar necessidade de Service Endpoints, usa Private Endpoint
+      // Sem virtualNetworkRules: usando Private Endpoint
       ipRules: []
     }
   }
@@ -392,10 +395,11 @@ resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   }
 }
 
-// 8. VNet Integration para Web App
-resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-01' = {
-  parent: webApp
+// 8. VNet Integration para Web App (condicional)
+resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-01' = if (!skipVnetIntegration) {
   name: privateSubnetName
+  parent: webApp
+  location: resourceGroup().location
   properties: {
     vnetResourceId: resourceId('Microsoft.Network/virtualNetworks', vnetName)
   }
