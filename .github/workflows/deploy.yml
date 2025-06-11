@@ -55,7 +55,7 @@ jobs:
           inlineScript: |
             az deployment group create \
               --resource-group MiniProjetoCloud2.0 \
-              --template-file templates/vnet-with-subnets.bicep \
+              --template-file templates/vnet.bicep \
               --parameters \
                   vnetName='myVNet' \
                   addressPrefix='10.0.0.0/16' \
