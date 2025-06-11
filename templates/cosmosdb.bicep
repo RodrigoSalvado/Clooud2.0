@@ -1,4 +1,4 @@
-@description('Nome da Cosmos Account (globally unique). Se vazio, não cria Cosmos DB.')
+@description('Nome da Cosmos Account (globalmente único). Se vazio, não cria Cosmos DB.')
 param cosmosAccountName string = ''
 
 @description('Localização para a Cosmos Account. Se não fornecido, usa a do resource group.')
@@ -17,7 +17,7 @@ param cosmosPartitionKeyPath string = '/id'
 @minValue(400)
 param cosmosThroughput int = 400
 
-// Cosmos Account
+// Se cosmosAccountName estiver vazio, nada disto será criado
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (cosmosAccountName != '') {
   name: cosmosAccountName
   location: cosmosLocation
@@ -34,11 +34,11 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
-    // Se necessário, podes acrescentar networkAcls ou outras propriedades aqui
+    // Podes adicionar networkAcls ou outras propriedades conforme necessidade
   }
 }
 
-// SQL Database dentro da Cosmos Account
+// Base de dados SQL dentro da Cosmos Account
 resource cosmosSqlDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04-15' = if (cosmosAccountName != '') {
   parent: cosmosAccount
   name: cosmosDatabaseName
@@ -52,7 +52,7 @@ resource cosmosSqlDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04
   }
 }
 
-// Container dentro da base de dados
+// Container dentro da base de dados SQL
 resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2021-04-15' = if (cosmosAccountName != '') {
   parent: cosmosSqlDb
   name: cosmosContainerName

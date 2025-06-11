@@ -15,9 +15,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Se preferires, define via secrets:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
+      COSMOS_PRIMARY_LOCATION: 'westeurope'
+      COSMOS_FALLBACK_LOCATIONS: 'northeurope eastus'
 
     steps:
       - name: Checkout do repositório
@@ -56,23 +57,48 @@ jobs:
               enableBlobVersioning=true \
               blobSoftDeleteDays=7
 
-      # 3. Cosmos DB NoSQL (SQL API) - Opcional
+      # 3. Cosmos DB NoSQL (SQL API) - Opcional, com fallback de região
       - name: Deploy Cosmos DB NoSQL (SQL API) - Opcional
         run: |
           az bicep build --file templates/cosmosdb.bicep
-          if [ -n "${COSMOS_ACCOUNT_NAME}" ]; then
-            az deployment group create \
-              --resource-group MiniProjetoCloud2.0 \
-              --template-file templates/cosmosdb.bicep \
-              --parameters \
-                cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
-                cosmosLocation='westeurope' \
-                cosmosDatabaseName='RedditApp' \
-                cosmosContainerName='posts' \
-                cosmosPartitionKeyPath='/id' \
-                cosmosThroughput=${COSMOS_THROUGHPUT}
-          else
+          if [ -z "${COSMOS_ACCOUNT_NAME}" ]; then
             echo "Pular criação do Cosmos DB pois COSMOS_ACCOUNT_NAME está vazio."
+            exit 0
+          fi
+
+          # Preparar lista de regiões
+          LOCATIONS_TO_TRY=("${COSMOS_PRIMARY_LOCATION}")
+          for loc in $COSMOS_FALLBACK_LOCATIONS; do
+            LOCATIONS_TO_TRY+=("$loc")
+          done
+
+          SUCCESS=false
+          for region in "${LOCATIONS_TO_TRY[@]}"; do
+            echo "Tentando criar/atualizar Cosmos DB em região: $region"
+            if az deployment group create \
+                --resource-group MiniProjetoCloud2.0 \
+                --template-file templates/cosmosdb.bicep \
+                --parameters \
+                  cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
+                  cosmosLocation="$region" \
+                  cosmosDatabaseName='RedditApp' \
+                  cosmosContainerName='posts' \
+                  cosmosPartitionKeyPath='/id' \
+                  cosmosThroughput=${COSMOS_THROUGHPUT} \
+                --only-show-errors; then
+              echo "Cosmos DB criado/atualizado com sucesso em $region"
+              SUCCESS=true
+              break
+            else
+              echo "Falha na região $region. A tentar próxima, se existir."
+            fi
+          done
+
+          if [ "$SUCCESS" != "true" ]; then
+            echo "Falha em criar Cosmos DB em todas as regiões tentadas: ${LOCATIONS_TO_TRY[*]}"
+            echo "Podes: 1) tentar manualmente outra região; 2) solicitar quota/região; 3) continuar sem Cosmos."
+            # Se quiseres continuar mesmo sem Cosmos, faz exit 0; se for crítico, exit 1:
+            exit 1
           fi
 
       # 4. App Service Plan
@@ -112,7 +138,6 @@ jobs:
       - name: Deploy Web App
         run: |
           az bicep build --file templates/web-app.bicep
-          # Expande SAS token se existir
           TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
           if [ -z "$TOKEN" ]; then
             TOKEN=""
