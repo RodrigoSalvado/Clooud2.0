@@ -5,7 +5,6 @@ on:
     branches:
       - main
 
-# Permissões necessárias para obter o id-token
 permissions:
   id-token: write
   contents: read
@@ -21,10 +20,13 @@ jobs:
       - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}       # SP App (Application) ID
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}       # Tenant ID
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          # Sem client-secret: usa OIDC se estiver configurado no Azure AD
+
+      - name: Validar Bicep
+        run: |
+          az bicep build --file templates/resource-group.bicep
 
       - name: Deploy Bicep para Azure
         uses: azure/cli@v1
