@@ -1,33 +1,9 @@
-// Unified template: vnet, storage, private endpoint, app service plan, web app
+// Template unificado sem VNet: storage, app service plan, web app
 // Guarda este ficheiro em templates/main.bicep
 
 targetScope = 'resourceGroup'
 
 // Parâmetros gerais
-@minLength(1)
-@maxLength(40)
-@description('Nome da Virtual Network.')
-param vnetName string = 'myVNet'
-
-@description('Prefixo de endereço da VNet em CIDR. Ex.: "10.0.0.0/16".')
-param addressPrefix string = '10.0.0.0/16'
-
-@minLength(3)
-@maxLength(24)
-@description('Nome da subnet privada.')
-param privateSubnetName string = 'private-subnet'
-
-@description('Prefixo CIDR da subnet privada. Ex.: "10.0.1.0/24".')
-param privateSubnetPrefix string = '10.0.1.0/24'
-
-@minLength(3)
-@maxLength(24)
-@description('Nome da subnet pública.')
-param publicSubnetName string = 'public-subnet'
-
-@description('Prefixo CIDR da subnet pública. Ex.: "10.0.2.0/24".')
-param publicSubnetPrefix string = '10.0.2.0/24'
-
 @minLength(3)
 @maxLength(24)
 @description('Nome da Storage Account.')
@@ -42,11 +18,6 @@ param containerName string = 'reddit-posts'
 param enableBlobVersioning bool = true
 @description('Dias de soft delete para blobs. Se <= 0, não configura.')
 param blobSoftDeleteDays int = 7
-
-@minLength(1)
-@maxLength(40)
-@description('Nome do Private Endpoint para Storage.')
-param privateEndpointName string = 'pe-storage'
 
 @minLength(1)
 @maxLength(40)
@@ -96,159 +67,7 @@ param containerRegistryPassword string = ''
 @description('Definir a true para criar Role Assignment para Managed Identity no Storage. Requer permissões Microsoft.Authorization/roleAssignments/write.')
 param createRoleAssignment bool = false
 
-@description('Definir a true para saltar a VNet Integration se já existir. Permite evitar conflito se já estiver integrado.')
-param skipVnetIntegration bool = false
-
-// 1. NSG da subnet privada
-resource nsgPrivate 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
-  name: '${vnetName}-${privateSubnetName}-nsg'
-  location: resourceGroup().location
-  properties: {
-    securityRules: [
-      {
-        name: 'Allow-VNet-Inbound'
-        properties: {
-          priority: 100
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: '*'
-          sourceAddressPrefix: addressPrefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: addressPrefix
-          destinationPortRange: '*'
-        }
-      }
-      {
-        name: 'Deny-Internet-Inbound'
-        properties: {
-          priority: 200
-          direction: 'Inbound'
-          access: 'Deny'
-          protocol: '*'
-          sourceAddressPrefix: 'Internet'
-          sourcePortRange: '*'
-          destinationAddressPrefix: addressPrefix
-          destinationPortRange: '*'
-        }
-      }
-      {
-        name: 'Allow-Internet-Outbound'
-        properties: {
-          priority: 100
-          direction: 'Outbound'
-          access: 'Allow'
-          protocol: '*'
-          sourceAddressPrefix: addressPrefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: 'Internet'
-          destinationPortRange: '*'
-        }
-      }
-    ]
-  }
-}
-
-// 2. NSG da subnet pública
-resource nsgPublic 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
-  name: '${vnetName}-${publicSubnetName}-nsg'
-  location: resourceGroup().location
-  properties: {
-    securityRules: [
-      {
-        name: 'Allow-HTTP-Inbound'
-        properties: {
-          priority: 100
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: 'Internet'
-          sourcePortRange: '*'
-          destinationAddressPrefix: addressPrefix
-          destinationPortRange: '80'
-        }
-      }
-      {
-        name: 'Allow-HTTPS-Inbound'
-        properties: {
-          priority: 110
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: 'Internet'
-          sourcePortRange: '*'
-          destinationAddressPrefix: addressPrefix
-          destinationPortRange: '443'
-        }
-      }
-      {
-        name: 'Allow-SSH-Inbound'
-        properties: {
-          priority: 120
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: 'Internet'
-          sourcePortRange: '*'
-          destinationAddressPrefix: addressPrefix
-          destinationPortRange: '22'
-        }
-      }
-      {
-        name: 'Allow-VNet-Inbound'
-        properties: {
-          priority: 200
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: '*'
-          sourceAddressPrefix: addressPrefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: addressPrefix
-          destinationPortRange: '*'
-        }
-      }
-      {
-        name: 'Allow-Internet-Outbound'
-        properties: {
-          priority: 100
-          direction: 'Outbound'
-          access: 'Allow'
-          protocol: '*'
-          sourceAddressPrefix: addressPrefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: 'Internet'
-          destinationPortRange: '*'
-        }
-      }
-    ]
-  }
-}
-
-// 3. Virtual Network com subnets
-resource virtualNetwork 'Microsoft.Network/virtualNetworks@2022-09-01' = {
-  name: vnetName
-  location: resourceGroup().location
-  properties: {
-    addressSpace: { addressPrefixes: [ addressPrefix ] }
-    subnets: [
-      {
-        name: privateSubnetName
-        properties: {
-          addressPrefix: privateSubnetPrefix
-          networkSecurityGroup: { id: nsgPrivate.id }
-        }
-      }
-      {
-        name: publicSubnetName
-        properties: {
-          addressPrefix: publicSubnetPrefix
-          networkSecurityGroup: { id: nsgPublic.id }
-        }
-      }
-    ]
-  }
-}
-
-// 4. Storage Account e Container
+// 1. Storage Account e Container
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: storageAccountName
   location: resourceGroup().location
@@ -258,12 +77,12 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
     accessTier: 'Hot'
     supportsHttpsTrafficOnly: true
     networkAcls: {
-      defaultAction: 'Deny'
+      defaultAction: 'Allow'
       bypass: 'AzureServices'
-      ipRules: []
     }
   }
 }
+
 // Configurar versioning e soft delete
 resource blobServiceUpdate 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = if (enableBlobVersioning || blobSoftDeleteDays > 0) {
   name: 'default'
@@ -286,50 +105,7 @@ resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/container
   properties: { publicAccess: 'None' }
 }
 
-// 5. Private Endpoint para Storage
-resource privateEndpoint 'Microsoft.Network/privateEndpoints@2022-05-01' = {
-  name: privateEndpointName
-  location: resourceGroup().location
-  properties: {
-    subnet: { id: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, privateSubnetName) }
-    privateLinkServiceConnections: [
-      {
-        name: 'pe-connection'
-        properties: {
-          privateLinkServiceId: storageAccount.id
-          groupIds: [ 'blob' ]
-          requestMessage: 'Please approve'
-        }
-      }
-    ]
-  }
-}
-// Private DNS Zone
-var dnsZoneName = 'privatelink.blob${environment().suffixes.storage}'
-resource privateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: dnsZoneName
-  location: 'global'
-}
-resource vnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
-  name: '${vnetName}-link'
-  parent: privateDnsZone
-  properties: {
-    virtualNetwork: { id: resourceId('Microsoft.Network/virtualNetworks', vnetName) }
-    registrationEnabled: false
-  }
-}
-var privateIp = privateEndpoint.properties.ipConfigurations[0].properties.privateIPAddress
-resource aRecord 'Microsoft.Network/privateDnsZones/A@2020-06-01' = {
-  name: storageAccountName
-  parent: privateDnsZone
-  properties: {
-    ttl: 3600
-    aRecords: [ { ipv4Address: privateIp } ]
-  }
-  dependsOn: [ vnetLink ]
-}
-
-// 6. App Service Plan
+// 2. App Service Plan
 resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: planName
   location: resourceGroup().location
@@ -376,7 +152,7 @@ var sasSettings = (containerSasToken != '') ? [
   }
 ] : []
 
-// 7. Web App com Managed Identity e App Settings
+// 3. Web App com Managed Identity e App Settings
 resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
   location: resourceGroup().location
@@ -394,17 +170,7 @@ resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   }
 }
 
-// 8. VNet Integration para Web App (condicional)
-resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-01' = if (!skipVnetIntegration) {
-  name: privateSubnetName
-  parent: webApp
-  location: resourceGroup().location
-  properties: {
-    vnetResourceId: resourceId('Microsoft.Network/virtualNetworks', vnetName)
-  }
-}
-
-// 9. Role Assignment para Managed Identity no Storage (condicional)
+// 4. Role Assignment para Managed Identity no Storage (condicional)
 resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = if (createRoleAssignment) {
   name: guid(storageAccount.id, webAppName, 'storageBlobContributor')
   scope: storageAccount
@@ -415,8 +181,6 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-prev
   }
 }
 
-output vnetId string = virtualNetwork.id
 output storageAccountId string = storageAccount.id
-output privateEndpointId string = privateEndpoint.id
 output appServicePlanId string = appServicePlan.id
 output webAppDefaultHostName string = webApp.properties.defaultHostName

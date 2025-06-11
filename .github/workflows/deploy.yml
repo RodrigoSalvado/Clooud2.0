@@ -1,4 +1,4 @@
-name: Deploy Bicep Unificado com Auto-detect VNet Integration
+name: Deploy Bicep Unificado sem VNet
 
 on:
   push:
@@ -42,71 +42,17 @@ jobs:
         run: |
           az group create --name MiniProjetoCloud2.0 --location westeurope
 
-      # 6. Determinar skipVnetIntegration
-      - name: Determinar skipVnetIntegration
-        id: check_integration
-        run: |
-          set -euxo pipefail
-          RG="MiniProjetoCloud2.0"
-          WEBAPP_NAME="minhaapp-rodrig0salv"
-          VNET_NAME="myVNet"
-          SUBNET_NAME="private-subnet"
-
-          # Verifica se o Web App existe
-          if ! az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" &>/dev/null; then
-            echo "Web App não existe ainda. skipVnetIntegration=false"
-            echo "skipVnetIntegration=false" >> $GITHUB_OUTPUT
-          else
-            # Instala jq se necessário
-            if ! command -v jq &>/dev/null; then
-              sudo apt-get update
-              sudo apt-get install -y jq
-            fi
-
-            # Lista integrações de VNet do Web App
-            INTEGRATIONS=$(az webapp vnet-integration list \
-              --resource-group "$RG" \
-              --name "$WEBAPP_NAME" \
-              -o json)
-
-            # Filtra integrações que correspondem exatamente ao VNet/Subnet desejados
-            MATCH=$(echo "$INTEGRATIONS" | jq --arg vnetName "$VNET_NAME" --arg subnetName "$SUBNET_NAME" '
-              .[] 
-              | select(
-                  ((.vnetResourceId // "") | endswith("/virtualNetworks/" + $vnetName))
-                  and
-                  ((.subnetResourceName // "") == $subnetName)
-                )
-            ')
-
-            if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
-              echo "Já existe integração com ${VNET_NAME}/${SUBNET_NAME}. skipVnetIntegration=true"
-              echo "skipVnetIntegration=true" >> $GITHUB_OUTPUT
-            else
-              echo "Não existe integração para ${VNET_NAME}/${SUBNET_NAME}. skipVnetIntegration=false"
-              echo "skipVnetIntegration=false" >> $GITHUB_OUTPUT
-            fi
-          fi
-        shell: bash
-
-      # 7. What-If Deploy (opcional)
+      # 6. What-If Deploy (opcional)
       - name: What-If Deploy (opcional)
         run: |
           az deployment group what-if \
             --resource-group MiniProjetoCloud2.0 \
             --template-file templates/main.bicep \
             --parameters \
-              vnetName='myVNet' \
-              addressPrefix='10.0.0.0/16' \
-              privateSubnetName='private-subnet' \
-              privateSubnetPrefix='10.0.1.0/24' \
-              publicSubnetName='public-subnet' \
-              publicSubnetPrefix='10.0.2.0/24' \
               storageAccountName='miniprojetostorage20' \
               containerName='reddit-posts' \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
-              privateEndpointName='pe-storage' \
               planName='ASP-MiniProjetoCloud2.0' \
               skuTier='Basic' \
               skuName='B2' \
@@ -119,10 +65,9 @@ jobs:
               containerRegistryUsername='' \
               containerRegistryPassword='' \
               createRoleAssignment=false \
-              skipVnetIntegration=${{ steps.check_integration.outputs.skipVnetIntegration }} \
             --only-show-errors
 
-      # 8. Deploy Unificado via az CLI
+      # 7. Deploy Unificado via CLI direto
       - name: Deploy Unificado via az CLI
         run: |
           set -euxo pipefail
@@ -131,17 +76,10 @@ jobs:
             --resource-group MiniProjetoCloud2.0 \
             --template-file templates/main.bicep \
             --parameters \
-              vnetName='myVNet' \
-              addressPrefix='10.0.0.0/16' \
-              privateSubnetName='private-subnet' \
-              privateSubnetPrefix='10.0.1.0/24' \
-              publicSubnetName='public-subnet' \
-              publicSubnetPrefix='10.0.2.0/24' \
               storageAccountName='miniprojetostorage20' \
               containerName='reddit-posts' \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
-              privateEndpointName='pe-storage' \
               planName='ASP-MiniProjetoCloud2.0' \
               skuTier='Basic' \
               skuName='B2' \
@@ -154,10 +92,9 @@ jobs:
               containerRegistryUsername='' \
               containerRegistryPassword='' \
               createRoleAssignment=false \
-              skipVnetIntegration=${{ steps.check_integration.outputs.skipVnetIntegration }} \
             --only-show-errors
 
-      # 9. Mostrar outputs do deploy
+      # 8. Mostrar outputs do deploy
       - name: Mostrar outputs do deploy
         run: |
           DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)
