@@ -1,9 +1,8 @@
 targetScope = 'resourceGroup'
 
-// Parâmetros
 @minLength(3)
 @maxLength(24)
-@description('Nome da Storage Account (entre 3 e 24 caracteres, minúsculas e dígitos; sem pontos).')
+@description('Nome da Storage Account (entre 3 e 24 caracteres, minúsculas e dígitos).')
 param storageAccountName string
 
 @description('Localização. Por defeito, usa a localização do Resource Group.')
@@ -29,30 +28,29 @@ param kind string = 'StorageV2'
   'Hot'
   'Cool'
 ])
-@description('Access tier (aplica-se a StorageV2 para blob)')
+@description('Access tier (aplica-se a StorageV2)')
 param accessTier string = 'Hot'
 
 @description('Forçar apenas tráfego HTTPS')
 param allowHttpsTrafficOnly bool = true
 
-@description('Habilitar versioning em blobs? Se true, configuramos via child resource blobServices.')
+@description('Habilitar versioning em blobs?')
 param enableBlobVersioning bool = false
 
-@description('Número de dias para soft delete de blobs. Se <= 0, não configuramos soft delete.')
+@description('Dias de soft delete para blobs. Se <= 0, não configura.')
 param blobSoftDeleteDays int = 0
 
 @description('DefaultAction para network rules: Allow ou Deny')
 param defaultAction string = 'Allow'
 
-@description('Lista de CIDR ou IPs para permitir; vazio = acesso público (menos restrito)')
+@description('Lista de CIDR ou IPs para permitir; vazio = mais aberto')
 param allowedNetworkRules array = []
 
 @minLength(3)
 @maxLength(63)
-@description('Nome do Blob Container (entre 3 e 63 caracteres; minúsculas, dígitos e traços permitidos).')
+@description('Nome do Blob Container (entre 3 e 63 caracteres; minúsculas, dígitos e traços).')
 param containerName string
 
-// 1. Criar ou atualizar a Storage Account
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: storageAccountName
   location: location
@@ -73,11 +71,9 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
       ]
       virtualNetworkRules: []
     }
-    // Outras propriedades permitidas podem ser adicionadas aqui, se necessário
   }
 }
 
-// 2. Atualizar versioning/soft delete via recurso filho blobServices, se solicitado
 resource blobServiceUpdate 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = if (enableBlobVersioning || blobSoftDeleteDays > 0) {
   name: 'default'
   parent: storageAccount
@@ -90,13 +86,12 @@ resource blobServiceUpdate 'Microsoft.Storage/storageAccounts/blobServices@2021-
   }
 }
 
-// 3. Declarar referência existente a blobServices para usar como parent do container
+// Para criar o container privado
 resource blobServiceExisting 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' existing = {
   name: 'default'
   parent: storageAccount
 }
 
-// 4. Criar o container como child resource de blobServiceExisting
 resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
   name: containerName
   parent: blobServiceExisting
@@ -105,12 +100,5 @@ resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/container
   }
 }
 
-// Outputs úteis
 output storageAccountId string = storageAccount.id
-output storageAccountEndpoints object = {
-  blob: storageAccount.properties.primaryEndpoints.blob
-  file: storageAccount.properties.primaryEndpoints.file
-  queue: storageAccount.properties.primaryEndpoints.queue
-  table: storageAccount.properties.primaryEndpoints.table
-}
 output blobContainerName string = containerName

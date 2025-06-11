@@ -1,4 +1,4 @@
-name: Deploy Bicep com Azure
+name: Deploy Bicep com Azure e VNet + Private Endpoints
 
 on:
   push:
@@ -32,11 +32,13 @@ jobs:
         run: |
           az bicep install || true
           az bicep build --file templates/resource-group.bicep
+          az bicep build --file templates/vnet-with-subnets.bicep
           az bicep build --file templates/storage-account.bicep
+          az bicep build --file templates/storage-private-endpoint.bicep
           az bicep build --file templates/app-service-plan.bicep
           az bicep build --file templates/web-app.bicep
 
-      # 4. Deploy do Resource Group (escopo de subscrição)
+      # 4. Deploy do Resource Group
       - name: Deploy Resource Group
         uses: azure/cli@v1
         with:
@@ -46,8 +48,24 @@ jobs:
               --template-file templates/resource-group.bicep \
               --parameters rgName='MiniProjetoCloud2.0' location='westeurope'
 
-      # 5. Deploy da Storage Account + container
-      - name: Deploy Storage + Container
+      # 5. Deploy da VNet com subnets e NSGs
+      - name: Deploy VNet com Subnets
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            az deployment group create \
+              --resource-group MiniProjetoCloud2.0 \
+              --template-file templates/vnet-with-subnets.bicep \
+              --parameters \
+                  vnetName='myVNet' \
+                  addressPrefix='10.0.0.0/16' \
+                  privateSubnetName='private-subnet' \
+                  privateSubnetPrefix='10.0.1.0/24' \
+                  publicSubnetName='public-subnet' \
+                  publicSubnetPrefix='10.0.2.0/24'
+
+      # 6. Deploy da Storage Account + container
+      - name: Deploy Storage Account + Container
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -60,7 +78,21 @@ jobs:
                   enableBlobVersioning=true \
                   blobSoftDeleteDays=7
 
-      # 6. Deploy do App Service Plan
+      # 7. Deploy do Private Endpoint para Storage + Private DNS Zone
+      - name: Deploy Private Endpoint para Storage
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            az deployment group create \
+              --resource-group MiniProjetoCloud2.0 \
+              --template-file templates/storage-private-endpoint.bicep \
+              --parameters \
+                  privateEndpointName='pe-storage' \
+                  storageAccountName='miniprojetostorage20' \
+                  vnetName='myVNet' \
+                  subnetName='private-subnet'
+
+      # 8. Deploy do App Service Plan
       - name: Deploy App Service Plan
         uses: azure/cli@v1
         with:
@@ -75,13 +107,12 @@ jobs:
                   capacity=1 \
                   isLinux=true
 
-      # 7. Gerar User Delegation SAS para o container
-      - name: Gerar User Delegation SAS para o container
+      # 9. (Opcional) Gerar SAS para o container ou usar Managed Identity
+      - name: Gerar User Delegation SAS para o container (opcional)
         id: gen_sas
         run: |
           ACCOUNT_NAME="miniprojetostorage20"
           CONTAINER_NAME="reddit-posts"
-          # Expiração em UTC (máximo 7 dias); aqui 1 dia
           EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
           sasToken=$(az storage container generate-sas \
             --account-name $ACCOUNT_NAME \
@@ -94,8 +125,8 @@ jobs:
             -o tsv)
           echo "containerSasToken=$sasToken" >> $GITHUB_OUTPUT
 
-      # 8. Deploy do Web App com SAS nas App Settings
-      - name: Deploy Web App com SAS na App Settings
+      # 10. Deploy do Web App com VNet Integration e App Settings
+      - name: Deploy Web App com VNet Integration
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -107,4 +138,6 @@ jobs:
                   imageName='rodrig0salv/minha-app:latest' \
                   containerSasToken='${{ steps.gen_sas.outputs.containerSasToken }}' \
                   storageAccountName='miniprojetostorage20' \
-                  containerName='reddit-posts'
+                  containerName='reddit-posts' \
+                  vnetName='myVNet' \
+                  subnetName='private-subnet'
