@@ -257,9 +257,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
     networkAcls: {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
-      virtualNetworkRules: [
-        { id: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, privateSubnetName) }
-      ]
+      // Sem virtualNetworkRules para evitar necessidade de Service Endpoints, usa Private Endpoint
       ipRules: []
     }
   }

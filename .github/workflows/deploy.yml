@@ -15,9 +15,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout do repositório
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
+      # 2. Login no Azure via OIDC
       - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
@@ -25,18 +27,22 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # 3. Mostrar contexto Azure (subscrição ativa, etc.)
       - name: Mostrar contexto Azure
         run: az account show
 
+      # 4. Validar main.bicep
       - name: Validar main.bicep
         run: |
           az bicep install || true
           az bicep build --file templates/main.bicep
 
+      # 5. Criar Resource Group se não existir
       - name: Criar Resource Group se não existir
         run: |
           az group create --name MiniProjetoCloud2.0 --location westeurope
 
+      # 6. What-If Deploy (opcional) — usa mesmos parâmetros do deploy real
       - name: What-If Deploy (opcional)
         run: |
           az deployment group what-if \
@@ -65,8 +71,10 @@ jobs:
               containerRegistryUrl='' \
               containerRegistryUsername='' \
               containerRegistryPassword='' \
+              createRoleAssignment=false \
             --only-show-errors
 
+      # 7. Deploy Unificado via CLI direto
       - name: Deploy Unificado via az CLI
         run: |
           set -euxo pipefail
@@ -100,8 +108,12 @@ jobs:
               createRoleAssignment=false \
             --only-show-errors
 
+      # 8. Mostrar outputs do deploy
       - name: Mostrar outputs do deploy
         run: |
           DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)
           echo "Deployment name: $DEPLOY_NAME"
-          az deployment group show --resource-group MiniProjetoCloud2.0 --name "$DEPLOY_NAME" --query properties.outputs
+          az deployment group show \
+            --resource-group MiniProjetoCloud2.0 \
+            --name "$DEPLOY_NAME" \
+            --query properties.outputs
