@@ -1,4 +1,4 @@
-name: Deploy Bicep Individualizado
+name: Deploy Bicep Individualizado em France Central
 
 on:
   push:
@@ -18,7 +18,8 @@ jobs:
       COSMOS_THROUGHPUT: '400'
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
 
       - name: Login no Azure via OIDC
         uses: azure/login@v2
@@ -34,7 +35,7 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      - name: Verificar/(Re)criar RG em francecentral
+      - name: (Re)Criar Resource Group em francecentral
         run: |
           RG="MiniProjetoCloud2.0"
           TARGET_LOCATION="francecentral"
@@ -56,7 +57,7 @@ jobs:
             fi
           fi
 
-      - name: Validar Bicep localmente
+      - name: Validar templates Bicep localmente
         run: |
           az bicep install || true
           az bicep build --file templates/resource-group.bicep
@@ -78,7 +79,7 @@ jobs:
                 enableBlobVersioning=true \
                 blobSoftDeleteDays=7
 
-      - name: Deploy CosmosDB (fallback)
+      - name: Deploy CosmosDB (fallback se necessário/quota)
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -105,7 +106,7 @@ jobs:
                     if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then break; fi
                   done
                 else
-                  echo "Atualizar existente bem-sucedido em $region"
+                  echo "Cosmos existente em Succeeded em $region; atualizar."
                 fi
               fi
               if az deployment group create \
@@ -123,7 +124,7 @@ jobs:
                 SUCCESS=true
                 break
               else
-                echo "Falhou em $region. A tentar próxima..."
+                echo "Falhou em $region. Tentando próxima..."
               fi
             done
             if [ "$SUCCESS" != "true" ]; then
@@ -184,21 +185,7 @@ jobs:
                 containerRegistryUsername='' \
                 containerRegistryPassword=''
 
-      - name: Atribuir role Storage ao Web App (opcional)
-        if: ${{ always() }}
-        run: |
-          RG="MiniProjetoCloud2.0"
-          WEBAPP_NAME="minhaapp-rodrig0salv"
-          STORAGE_NAME="miniprojetostorage20"
-          PRINCIPAL_ID=$(az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" --query identity.principalId -o tsv)
-          if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
-            SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
-            az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$SCOPE" || echo "Pode já existir."
-          else
-            echo "Web App não tem identity configurada ou não existe ainda."
-          fi
-
-      - name: Mostrar outputs
+      - name: Mostrar outputs finais
         uses: azure/cli@v1
         with:
           inlineScript: |
