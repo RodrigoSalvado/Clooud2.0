@@ -20,8 +20,6 @@ param enableBlobVersioning bool = true
 param blobSoftDeleteDays int = 7
 
 // Cosmos DB NoSQL
-@minLength(3)
-@maxLength(44)
 @description('Nome da Cosmos DB account. Se vazio, não cria Cosmos.')
 param cosmosAccountName string = ''
 
@@ -152,19 +150,20 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (
 
 // 3. Cosmos DB SQL Database se definido
 resource cosmosSqlDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04-15' = if (cosmosAccountName != '' && cosmosDatabaseName != '') {
-  name: '${cosmosAccountName}/${cosmosDatabaseName}'
+  parent: cosmosAccount
+  name: cosmosDatabaseName
   properties: {
     resource: {
       id: cosmosDatabaseName
     }
     options: cosmosThroughput > 0 ? { throughput: cosmosThroughput } : {}
   }
-  dependsOn: [cosmosAccount]
 }
 
 // 4. Cosmos DB Container se definido
 resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2021-04-15' = if (cosmosAccountName != '' && cosmosDatabaseName != '' && cosmosContainerName != '') {
-  name: '${cosmosAccountName}/${cosmosDatabaseName}/${cosmosContainerName}'
+  parent: cosmosSqlDb
+  name: cosmosContainerName
   properties: {
     resource: {
       id: cosmosContainerName
@@ -178,7 +177,6 @@ resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
     }
     options: {}
   }
-  dependsOn: [cosmosSqlDb]
 }
 
 // 5. App Service Plan

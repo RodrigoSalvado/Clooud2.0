@@ -16,7 +16,7 @@ jobs:
 
     env:
       # Supondo que guardaste o nome da Cosmos Account em secrets
-      COSMOS_ACCOUNT_NAME: ${{ secrets.COSMOS_ACCOUNT_NAME }}
+      COSMOS_ACCOUNT_NAME: 'cosmosprojeto'
       # Podes igualmente guardar throughput ou outros parâmetros em secrets ou variáveis de repositório
       COSMOS_THROUGHPUT: '400'
 
@@ -59,11 +59,11 @@ jobs:
               containerName='reddit-posts' \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
-              cosmosAccountName='${{ env.COSMOS_ACCOUNT_NAME }}' \
+              cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
               cosmosDatabaseName='RedditApp' \
               cosmosContainerName='posts' \
               cosmosPartitionKeyPath='/id' \
-              cosmosThroughput=${{ env.COSMOS_THROUGHPUT }} \
+              cosmosThroughput=${COSMOS_THROUGHPUT} \
               planName='ASP-MiniProjetoCloud2.0' \
               skuTier='Basic' \
               skuName='B2' \
@@ -91,7 +91,7 @@ jobs:
               containerName='reddit-posts' \
               enableBlobVersioning=true \
               blobSoftDeleteDays=7 \
-              cosmosAccountName='${COSMOS_ACCOUNT_NAME}' \
+              cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
               cosmosDatabaseName='RedditApp' \
               cosmosContainerName='posts' \
               cosmosPartitionKeyPath='/id' \
