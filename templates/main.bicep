@@ -93,8 +93,6 @@ param containerRegistryUsername string = ''
 @description('Password do registo privado; vazio se público.')
 param containerRegistryPassword string = ''
 
-// Inicia a criação dos recursos
-
 // 1. NSG da subnet privada
 resource nsgPrivate 'Microsoft.Network/networkSecurityGroups@2022-09-01' = {
   name: '${vnetName}-${privateSubnetName}-nsg'
@@ -257,9 +255,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
       virtualNetworkRules: [
-        {
-          id: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, privateSubnetName)
-        }
+        { id: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, privateSubnetName) }
       ]
       ipRules: []
     }
@@ -334,35 +330,67 @@ resource aRecord 'Microsoft.Network/privateDnsZones/A@2020-06-01' = {
 resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: planName
   location: resourceGroup().location
-  sku: { tier: skuTier; name: skuName; capacity: capacity }
+  sku: {
+    tier: skuTier
+    name: skuName
+    capacity: capacity
+  }
   kind: isLinux ? 'linux' : 'app'
   properties: { reserved: isLinux }
 }
 
-// 7. Web App
+// Variáveis auxiliares para App Settings
+var dockerSettings = (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') ? [
+  {
+    name: 'DOCKER_REGISTRY_SERVER_URL'
+    value: containerRegistryUrl
+  }
+  {
+    name: 'DOCKER_REGISTRY_SERVER_USERNAME'
+    value: containerRegistryUsername
+  }
+  {
+    name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
+    value: containerRegistryPassword
+  }
+] : []
+
+var baseSettings = [
+  {
+    name: 'WEBSITES_PORT'
+    value: '5000'
+  }
+]
+
+var sasSettings = (containerSasToken != '') ? [
+  {
+    name: 'CONTAINER_SAS_TOKEN'
+    value: containerSasToken
+  }
+  {
+    name: 'CONTAINER_URL_WITH_SAS'
+    value: 'https://${storageAccountName}.blob${environment().suffixes.storage}/${containerName}?${containerSasToken}'
+  }
+] : []
+
+// 7. Web App com Managed Identity e App Settings
 resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
   location: resourceGroup().location
   kind: 'app,linux'
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     serverFarmId: appServicePlan.id
     siteConfig: {
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
-      appSettings: concat(
-        (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') ? [
-          { name: 'DOCKER_REGISTRY_SERVER_URL'; value: containerRegistryUrl }
-          { name: 'DOCKER_REGISTRY_SERVER_USERNAME'; value: containerRegistryUsername }
-          { name: 'DOCKER_REGISTRY_SERVER_PASSWORD'; value: containerRegistryPassword }
-        ] : [],
-        [ { name: 'WEBSITES_PORT'; value: '5000' } ],
-        (containerSasToken != '') ? [ { name: 'CONTAINER_SAS_TOKEN'; value: containerSasToken } ] : [],
-        (containerSasToken != '') ? [ { name: 'CONTAINER_URL_WITH_SAS'; value: 'https://${storageAccountName}.blob${environment().suffixes.storage}/${containerName}?${containerSasToken}' } ] : []
-      )
+      appSettings: concat(dockerSettings, baseSettings, sasSettings)
     }
   }
-  dependsOn: [ appServicePlan, storageAccount, privateEndpoint ]
 }
+
 // 8. VNet Integration para Web App
 resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-01' = {
   parent: webApp
@@ -372,21 +400,15 @@ resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-
   }
 }
 
-// 9. Managed Identity e Role Assignment para Storage (opcional)
-resource assignIdentity 'Microsoft.Web/sites@2022-03-01' = {
-  name: webAppName
-  properties: { identity: { type: 'SystemAssigned' } }
-  dependsOn: [ webApp ]
-}
+// 9. Role Assignment para Managed Identity no Storage
 resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
-  name: guid(storageAccount.id, webApp.identity.principalId, 'storageBlobDataContributor')
+  name: guid(storageAccount.id, webAppName, 'storageBlobContributor')
+  scope: storageAccount
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
     principalId: webApp.identity.principalId
     principalType: 'ServicePrincipal'
-    scope: storageAccount.id
   }
-  dependsOn: [ assignIdentity ]
 }
 
 output vnetId string = virtualNetwork.id
