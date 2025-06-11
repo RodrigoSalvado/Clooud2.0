@@ -1,111 +1,128 @@
-@description('Nome da Web App')
+@description('Nome do Web App a criar')
 param webAppName string
-
-@description('Localização (default resourceGroup().location)')
-param location string = resourceGroup().location
 
 @description('Nome do App Service Plan existente')
 param planName string
 
-@description('Imagem Docker a usar, ex: "meuuser/minha-app:latest"')
+@description('Imagem Docker a usar, ex: "rodrig0salv/minha-app:latest"')
 param imageName string
 
-@description('Token SAS para Storage (opcional). Se vazio, não adiciona.')
+@description('SAS token para Storage se necessário (pode estar vazio)')
 param containerSasToken string = ''
 
-@description('Nome da Storage Account (opcional). Se vazio, não adiciona.')
+@description('Nome da Storage Account para usar na App Settings (se o teu código consome blobs via SAS)')
 param storageAccountName string = ''
 
-@description('Nome do container no Storage (opcional). Se vazio, não adiciona.')
+@description('Nome do container na Storage Account para usar (se aplicável)')
 param containerName string = ''
 
-@description('URL do registry privado, ex: "https://myregistry.azurecr.io" (opcional). Se vazio, não adiciona.')
+@description('URL de um Container Registry privado (ex.: myregistry.azurecr.io), ou vazio')
 param containerRegistryUrl string = ''
 
-@description('Username do registry (opcional).')
+@description('Username do Container Registry, se privado')
 param containerRegistryUsername string = ''
 
-@description('Password do registry (opcional).')
+@secure()
+@description('Password do Container Registry, se privado')
 param containerRegistryPassword string = ''
 
-@description('Criar Role Assignment para a Web App Managed Identity na Storage Account?')
+@description('Indica se deves criar role assignment depois (false se fazes manualmente no workflow)')
 param createRoleAssignment bool = false
 
-// Base de appSettings
-var baseAppSettings = [
-  {
-    name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
-    value: 'false'
-  }
-]
+// Obtém a referência ao App Service Plan existente
+resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' existing = {
+  name: planName
+}
 
-// AppSettings para Storage SAS, se fornecido
-var storageSettings = (containerSasToken != '') ? [
-  {
-    name: 'STORAGE_SAS_TOKEN'
-    value: containerSasToken
-  }
-  {
-    name: 'STORAGE_ACCOUNT_NAME'
-    value: storageAccountName
-  }
-  {
-    name: 'CONTAINER_NAME'
-    value: containerName
-  }
-] : []
-
-// AppSettings para registry privado, se fornecido
-var registrySettings = (containerRegistryUrl != '') ? [
-  {
-    name: 'DOCKER_REGISTRY_SERVER_URL'
-    value: containerRegistryUrl
-  }
-  {
-    name: 'DOCKER_REGISTRY_SERVER_USERNAME'
-    value: containerRegistryUsername
-  }
-  {
-    name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
-    value: containerRegistryPassword
-  }
-] : []
-
+// Cria o Web App Linux com Container
 resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
-  location: location
+  location: resourceGroup().location
   kind: 'app,linux,container'
+  properties: {
+    serverFarmId: appServicePlan.id
+    siteConfig: {
+      // Define a runtime: imagem docker
+      linuxFxVersion: 'DOCKER|${imageName}'
+      // Se usares registro privado, configura credenciais
+      {% if containerRegistryUrl != '' %}
+      acrUseManagedIdentityCreds: false
+      acrPullUserName: containerRegistryUsername
+      acrPullPassword: containerRegistryPassword
+      {% else %}
+      // nada extra se imagem pública no Docker Hub
+      {% endif %}
+      // Outras definições, p.ex. alwaysOn, etc.
+      alwaysOn: true
+      // Se quiseres variáveis de ambiente:
+      appSettings: [
+        // Se houver SAS token e storageAccountName/containerName, podes definir uma setting
+        // p.ex. STORAGE_SAS_URL = "https://<storageAccount>.blob.core.windows.net/<container>?<SAS>"
+        // Só define se tiveres parâmetros não vazios:
+        // Nota: fazer condicional em Bicep numa lista é verboso; uma estratégia é construir array
+      ]
+    }
+  }
   identity: {
     type: 'SystemAssigned'
   }
+}
+
+// Exemplo de como construir appSettings condicionalmente:
+var settings = [
+  // Sempre podes definir outras settings fixas aqui
+]
+
+var storageSettingName = 'STORAGE_SAS_URL'
+var storageSasUrl = (storageAccountName != '' && containerName != '' && containerSasToken != '')
+  ? 'https://${storageAccountName}.blob.core.windows.net/${containerName}?${containerSasToken}'
+  : ''
+
+// Se storageSasUrl não for vazio, adiciona ao array de settings
+var appSettingsCombined = (storageSasUrl != '')
+  ? union(settings, [
+      {
+        name: storageSettingName
+        value: storageSasUrl
+      }
+    ])
+  : settings
+
+// Agora, refaz o resource webApp mas usando appSettingsCombined
+resource webAppWithSettings 'Microsoft.Web/sites@2022-03-01' = {
+  name: webAppName
+  location: resourceGroup().location
+  kind: 'app,linux,container'
   properties: {
-    serverFarmId: resourceId('Microsoft.Web/serverfarms', planName)
+    serverFarmId: appServicePlan.id
     siteConfig: {
-      // Usa string interpolation para a Docker image
-      linuxFxVersion: 'DOCKER|' + imageName
-      appSettings: concat(
-        baseAppSettings,
-        storageSettings,
-        registrySettings
-      )
+      linuxFxVersion: 'DOCKER|${imageName}'
+      alwaysOn: true
+      appSettings: [
+        for setting in appSettingsCombined: {
+          name: setting.name
+          value: setting.value
+        }
+      ]
+      {% if containerRegistryUrl != '' %}
+      acrUseManagedIdentityCreds: false
+      acrPullUserName: containerRegistryUsername
+      acrPullPassword: containerRegistryPassword
+      {% endif %}
     }
   }
-}
-
-// Se precisares de criar Role Assignment na Storage Account
-resource storageAccountForRole 'Microsoft.Storage/storageAccounts@2022-09-01' existing = if (createRoleAssignment && storageAccountName != '') {
-  name: storageAccountName
-}
-
-// A principalId da identidade do Web App
-var principalId = webApp.identity.principalId
-
-resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = if (createRoleAssignment && storageAccountName != '') {
-  name: guid(storageAccountForRole.id, principalId, 'StorageBlobDataContributor')
-  scope: storageAccountForRole
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe') // Storage Blob Data Contributor
-    principalId: principalId
-    principalType: 'ServicePrincipal'
+  identity: {
+    type: 'SystemAssigned'
   }
 }
+
+// NOTA: não tentar fazer role assignment aqui em Bicep, pois principalId não é conhecido no início.
+// Se createRoleAssignment == true, aconselha-se a fazer via CLI ou script pós-deploy.
+// Por exemplo, no workflow PowerShell/Bash: 
+//   PRINCIPAL_ID=$(az webapp show ... --query identity.principalId -o tsv)
+//   STORAGE_ID=$(az storage account show ... --query id -o tsv)
+//   az role assignment create --assignee-object-id $PRINCIPAL_ID --role Contributor --scope $STORAGE_ID
+
+// Outputs úteis:
+output webAppDefaultHostName string = webApp.properties.defaultHostName
+output principalId string = webApp.identity.principalId

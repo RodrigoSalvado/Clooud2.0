@@ -38,7 +38,7 @@ jobs:
       # 4. Validar templates Bicep localmente (runner Ubuntu)
       - name: Validar todos os templates Bicep
         run: |
-          # Instala Bicep CLI localmente se quiseres (normalmente já instalado)
+          # Instala Bicep CLI localmente se quiseres (normalmente já instalado no runner)
           az bicep install || true
           az bicep build --file templates/resource-group.bicep
           az bicep build --file templates/storage-account.bicep
@@ -51,8 +51,7 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            # Não fazemos az bicep install aqui para evitar conflito
-            az bicep build --file templates/resource-group.bicep
+            # Faz build local se quiseres, mas o contêiner do CLI compila automaticamente ao fazer deployment
             az deployment sub create \
               --location francecentral \
               --template-file templates/resource-group.bicep \
@@ -63,7 +62,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            az bicep build --file templates/storage-account.bicep
             az deployment group create \
               --resource-group MiniProjetoCloud2.0 \
               --template-file templates/storage-account.bicep \
@@ -86,15 +84,13 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            az bicep build --file templates/cosmosdb.bicep
-
             if [ -z "${COSMOS_ACCOUNT_NAME}" ]; then
               echo "Pular criação do Cosmos DB pois COSMOS_ACCOUNT_NAME está vazio."
               exit 0
             fi
 
             COSMOS_PRIMARY_LOCATION='francecentral'
-            COSMOS_FALLBACK_LOCATIONS='westeurope northeurope eastus uk southcentralus'
+            COSMOS_FALLBACK_LOCATIONS='westeurope northeurope eastus uksouth'
 
             LOCATIONS_TO_TRY=("$COSMOS_PRIMARY_LOCATION")
             for loc in $COSMOS_FALLBACK_LOCATIONS; do
@@ -158,7 +154,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            az bicep build --file templates/app-service-plan.bicep
             az deployment group create \
               --resource-group MiniProjetoCloud2.0 \
               --template-file templates/app-service-plan.bicep \
@@ -194,7 +189,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            az bicep build --file templates/web-app.bicep
             TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
             if [ -z "$TOKEN" ]; then
               TOKEN=""
@@ -214,7 +208,33 @@ jobs:
                 containerRegistryPassword='' \
                 createRoleAssignment=false
 
-      # 12. Mostrar outputs finais
+      # 12. Atribuir role assignment (opcional, fora do Bicep)
+      - name: Atribuir role ao Web App sobre Storage (opcional)
+        if: ${{ always() }}
+        run: |
+          RG="MiniProjetoCloud2.0"
+          WEBAPP_NAME="minhaapp-rodrig0salv"
+          STORAGE_NAME="miniprojetostorage20"
+
+          PRINCIPAL_ID=$(az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" --query identity.principalId -o tsv)
+          if [ -z "$PRINCIPAL_ID" ] || [ "$PRINCIPAL_ID" == "null" ]; then
+            echo "Não obtive principalId do Web App. Verifica se identity está configurado."
+            exit 1
+          fi
+
+          STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+          if [ -z "$STORAGE_SCOPE" ]; then
+            echo "Não obtive o resource id da Storage Account."
+            exit 1
+          fi
+
+          echo "Atribuir role 'Storage Blob Data Contributor' ao Web App sobre a Storage Account..."
+          az role assignment create \
+            --assignee-object-id "$PRINCIPAL_ID" \
+            --role "Storage Blob Data Contributor" \
+            --scope "$STORAGE_SCOPE"
+
+      # 13. Mostrar outputs finais
       - name: Mostrar outputs do deploy
         uses: azure/cli@v1
         with:
