@@ -34,7 +34,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
-    // Por defeito, sem redes restritas. Se quiseres Private Endpoint, terás de fazer um ficheiro extra.
+    // Se necessário, podes acrescentar networkAcls ou outras propriedades aqui
   }
 }
 
@@ -69,6 +69,6 @@ resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
         indexingMode: 'consistent'
       }
     }
-    options: { }
+    options: {}
   }
 }

@@ -26,7 +26,6 @@ resource plan 'Microsoft.Web/serverfarms@2022-03-01' = {
     capacity: capacity
   }
   properties: {
-    reserved: isLinux  // reservada = true para Linux
-    // Se Windows: reserved=false
+    reserved: isLinux  // true para Linux
   }
 }

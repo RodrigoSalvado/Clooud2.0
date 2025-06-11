@@ -1,4 +1,4 @@
-@description('Nome da Storage Account (must be globally unique, 3-24 caracteres, sem letras maiúsculas)')
+@description('Nome da Storage Account (único globalmente, 3-24 caracteres, minúsculas e números)')
 param storageAccountName string
 
 @description('Localização do recurso (por defeito, usa a location do resource group)')
@@ -14,6 +14,7 @@ param enableBlobVersioning bool = false
 @minValue(1)
 param blobSoftDeleteDays int = 7
 
+// Cria a Storage Account
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: storageAccountName
   location: location
@@ -24,19 +25,27 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   properties: {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
-    immutableStorageWithVersioning: {
-      state: enableBlobVersioning ? 'Enabled' : 'Disabled'
-    }
-    deleteRetentionPolicy: {
-      enabled: enableBlobVersioning
-      days: enableBlobVersioning ? blobSoftDeleteDays : null
-    }
-    // Outras propriedades omitidas por simplicidade
+    supportsHttpsTrafficOnly: true
+    // Outros blocos (networkAcls, encryption, etc.) podem ser adicionados aqui se necessário
   }
 }
 
+// Configuração de versioning e soft delete no serviço de blob
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    isVersioningEnabled: enableBlobVersioning
+    deleteRetentionPolicy: {
+      enabled: enableBlobVersioning
+      days: enableBlobVersioning ? blobSoftDeleteDays : 0
+    }
+  }
+}
+
+// Container dentro do blob service
 resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
-  parent: storageAccount::blobServices::default
+  parent: blobService
   name: containerName
   properties: {
     publicAccess: 'None'

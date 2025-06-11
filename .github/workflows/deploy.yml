@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Se preferires, define aqui ou via secrets:
+      # Se preferires, define via secrets:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
 
@@ -33,7 +33,7 @@ jobs:
       - name: Mostrar contexto Azure
         run: az account show
 
-      # 1. Criar Resource Group (subscription scope)
+      # 1. Deploy Resource Group (subscription scope)
       - name: Deploy Resource Group
         run: |
           az bicep install || true
@@ -56,7 +56,7 @@ jobs:
               enableBlobVersioning=true \
               blobSoftDeleteDays=7
 
-      # 3. Cosmos DB (opcional, só se COSMOS_ACCOUNT_NAME não vazio)
+      # 3. Cosmos DB NoSQL (SQL API) - Opcional
       - name: Deploy Cosmos DB NoSQL (SQL API) - Opcional
         run: |
           az bicep build --file templates/cosmosdb.bicep
@@ -89,7 +89,7 @@ jobs:
               capacity=1 \
               isLinux=true
 
-      # 5. (Opcional) Gerar SAS token para o container
+      # 5. Gerar SAS token para Storage (opcional)
       - name: Gerar SAS token para Storage (opcional)
         id: gen_sas
         run: |
@@ -112,10 +112,9 @@ jobs:
       - name: Deploy Web App
         run: |
           az bicep build --file templates/web-app.bicep
-          # Decide se usar o SAS gerado ou vazio:
-          if [ -n "${{ steps.gen_sas.outputs.SAS_TOKEN }}" ]; then
-            TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
-          else
+          # Expande SAS token se existir
+          TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
+          if [ -z "$TOKEN" ]; then
             TOKEN=""
           fi
           az deployment group create \
@@ -125,7 +124,7 @@ jobs:
               webAppName='minhaapp-rodrig0salv' \
               planName='ASP-MiniProjetoCloud2.0' \
               imageName='rodrig0salv/minha-app:latest' \
-              containerSasToken="${TOKEN}" \
+              containerSasToken="$TOKEN" \
               storageAccountName='miniprojetostorage20' \
               containerName='reddit-posts' \
               containerRegistryUrl='' \
@@ -133,7 +132,7 @@ jobs:
               containerRegistryPassword='' \
               createRoleAssignment=false
 
-      # 7. Mostrar outputs
+      # 7. Mostrar outputs finais
       - name: Mostrar outputs do deploy
         run: |
           DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)
