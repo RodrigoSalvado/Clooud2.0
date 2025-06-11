@@ -47,6 +47,11 @@ param defaultAction string = 'Allow'
 @description('Lista de CIDR ou IPs para permitir; vazio = acesso público (menos restrito)')
 param allowedNetworkRules array = []
 
+@minLength(3)
+@maxLength(63)
+@description('Nome do Blob Container (entre 3 e 63 caracteres; minúsculas, dígitos e traços permitidos).')
+param containerName string
+
 // 1. Criar ou atualizar a Storage Account
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: storageAccountName
@@ -73,7 +78,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
 }
 
 // 2. Configurar versioning e soft delete via recurso filho blobServices, se solicitado
-//    Este recurso sempre existe, mas só aplicamos se algum parâmetro ativo
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = if (enableBlobVersioning || blobSoftDeleteDays > 0) {
   name: 'default'
   parent: storageAccount
@@ -86,18 +90,15 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01'
   }
 }
 
-// 3. Criar o container (child resource)
-@minLength(3)
-@maxLength(63)
-@description('Nome do Blob Container (entre 3 e 63 caracteres; minúsculas, dígitos e traços permitidos).')
-param containerName string
-
+// 3. Criar o container como child resource de storageAccount
+//    Usamos name = 'default/${containerName}' e parent = storageAccount
 resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
-  name: containerName
-  parent: storageAccount::blobServices('default')
+  name: 'default/${containerName}'
+  parent: storageAccount
   properties: {
     publicAccess: 'None'
   }
+  // Dependência implícita em storageAccount; se blobService existir, o Azure aplica as configurações de versioning/soft delete antes
 }
 
 // Outputs úteis
@@ -108,4 +109,4 @@ output storageAccountEndpoints object = {
   queue: storageAccount.properties.primaryEndpoints.queue
   table: storageAccount.properties.primaryEndpoints.table
 }
-output blobContainerName string = blobContainer.name
+output blobContainerName string = containerName

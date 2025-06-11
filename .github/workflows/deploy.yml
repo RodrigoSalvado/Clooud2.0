@@ -47,9 +47,12 @@ jobs:
         with:
           inlineScript: |
             az deployment group create \
-              --resource-group MiniProjetoCloud2.0 \
-              --template-file templates/storage-account.bicep \
-              --parameters storageAccountName='miniprojetostorage20' containerName='reddit-posts' enableBlobVersioning=true blobSoftDeleteDays=7
+                --resource-group MiniProjetoCloud2.0 \
+                --template-file templates/storage-account.bicep \
+                --parameters storageAccountName='miniprojetostorage20' \
+                            containerName='reddit-posts' \
+                            enableBlobVersioning=true \
+                            blobSoftDeleteDays=7
 
       - name: Deploy App Service Plan
         uses: azure/cli@v1
