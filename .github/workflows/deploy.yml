@@ -1,9 +1,14 @@
-name: Deploy Bicep com Azure
+name: Deploy Bicep com Azure (OIDC)
 
 on:
   push:
     branches:
       - main
+
+# Permissões necessárias para obter o id-token
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
@@ -13,12 +18,13 @@ jobs:
       - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Login no Azure com Login v2
+      - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}       # SP App (Application) ID
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}       # Tenant ID
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # Sem client-secret: usa OIDC se estiver configurado no Azure AD
 
       - name: Deploy Bicep para Azure
         uses: azure/cli@v1
@@ -26,5 +32,5 @@ jobs:
           inlineScript: |
             az deployment sub create \
               --location westeurope \
-              --template-file infra/main.bicep \
-              --parameters rgName='meu-rg-github-actions' location='westeurope'
+              --template-file templates/resource-group.bicep \
+              --parameters rgName='MiniProjetoCloud2.0' location='westeurope'
