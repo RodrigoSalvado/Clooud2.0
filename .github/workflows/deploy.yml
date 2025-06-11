@@ -49,6 +49,8 @@ jobs:
           set -euxo pipefail
           RG="MiniProjetoCloud2.0"
           WEBAPP_NAME="minhaapp-rodrig0salv"
+          VNET_NAME="myVNet"
+          SUBNET_NAME="private-subnet"
 
           # Verifica se o Web App existe
           if ! az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" &>/dev/null; then
@@ -61,20 +63,31 @@ jobs:
               sudo apt-get install -y jq
             fi
 
-            # Lista integrações
+            # Lista integrações de VNet do Web App
             INTEGRATIONS=$(az webapp vnet-integration list \
               --resource-group "$RG" \
               --name "$WEBAPP_NAME" \
               -o json)
 
-            if [ "$(echo "$INTEGRATIONS" | jq 'length')" -eq 0 ]; then
-              echo "Não existe integração. skipVnetIntegration=false"
-              echo "skipVnetIntegration=false" >> $GITHUB_OUTPUT
-            else
-              echo "Já existe integração. skipVnetIntegration=true"
+            # Filtra integrações que correspondem exatamente ao VNet/Subnet desejados
+            MATCH=$(echo "$INTEGRATIONS" | jq --arg vnetName "$VNET_NAME" --arg subnetName "$SUBNET_NAME" '
+              .[] 
+              | select(
+                  ((.vnetResourceId // "") | endswith("/virtualNetworks/" + $vnetName))
+                  and
+                  ((.subnetResourceName // "") == $subnetName)
+                )
+            ')
+
+            if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
+              echo "Já existe integração com ${VNET_NAME}/${SUBNET_NAME}. skipVnetIntegration=true"
               echo "skipVnetIntegration=true" >> $GITHUB_OUTPUT
+            else
+              echo "Não existe integração para ${VNET_NAME}/${SUBNET_NAME}. skipVnetIntegration=false"
+              echo "skipVnetIntegration=false" >> $GITHUB_OUTPUT
             fi
           fi
+        shell: bash
 
       # 7. What-If Deploy (opcional)
       - name: What-If Deploy (opcional)
