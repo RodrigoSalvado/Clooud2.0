@@ -32,7 +32,7 @@ jobs:
         run: |
           az bicep install || true
           az bicep build --file templates/resource-group.bicep
-          az bicep build --file templates/vnet-with-subnets.bicep
+          az bicep build --file templates/vnet.bicep
           az bicep build --file templates/storage-account.bicep
           az bicep build --file templates/storage-private-endpoint.bicep
           az bicep build --file templates/app-service-plan.bicep
