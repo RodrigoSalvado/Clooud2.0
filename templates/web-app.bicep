@@ -1,128 +1,111 @@
-@description('Nome do Web App a criar')
+targetScope = 'resourceGroup'
+
+// Parâmetros
+@minLength(1)
+@maxLength(40)
+@description('Nome do App Service Plan existente. Ex.: "ASP-MiniProjetoCloud2.0".')
+param planName string = 'ASP-MiniProjetoCloud2.0'
+
+@minLength(2)
+@maxLength(60)
+@description('Nome do Web App (globalmente único).')
 param webAppName string
 
-@description('Nome do App Service Plan existente')
-param planName string
+@description('Localização. Por defeito, usa a localização do Resource Group.')
+param location string = resourceGroup().location
 
-@description('Imagem Docker a usar, ex: "rodrig0salv/minha-app:latest"')
-param imageName string
+@description('Nome da imagem Docker a usar, no formato "repository/image:tag".')
+param imageName string = 'rodrig0salv/minha-app:latest'
 
-@description('SAS token para Storage se necessário (pode estar vazio)')
-param containerSasToken string = ''
-
-@description('Nome da Storage Account para usar na App Settings (se o teu código consome blobs via SAS)')
-param storageAccountName string = ''
-
-@description('Nome do container na Storage Account para usar (se aplicável)')
-param containerName string = ''
-
-@description('URL de um Container Registry privado (ex.: myregistry.azurecr.io), ou vazio')
+@description('Se a imagem estiver num registo privado, passa aqui o URL; caso seja pública, deixa vazio.')
 param containerRegistryUrl string = ''
-
-@description('Username do Container Registry, se privado')
+@description('Username para o registo privado; caso público, deixa vazio.')
 param containerRegistryUsername string = ''
-
 @secure()
-@description('Password do Container Registry, se privado')
+@description('Password/secreto para o registo privado; caso público, deixa vazio.')
 param containerRegistryPassword string = ''
 
-@description('Indica se deves criar role assignment depois (false se fazes manualmente no workflow)')
-param createRoleAssignment bool = false
+@secure()
+@description('SAS token para o container, sem "?" inicial.')
+param containerSasToken string
 
-// Obtém a referência ao App Service Plan existente
-resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' existing = {
+// Parâmetros para montar URL completa do container com SAS (opcional)
+@minLength(3)
+@maxLength(24)
+@description('Nome da Storage Account onde está o container. Ex.: "miniprojetostorage20".')
+param storageAccountName string
+
+@minLength(3)
+@maxLength(63)
+@description('Nome do container de blobs. Ex.: "reddit-posts".')
+param containerName string = 'reddit-posts'
+
+// Referenciar o App Service Plan existente
+resource existingPlan 'Microsoft.Web/serverfarms@2022-03-01' existing = {
   name: planName
 }
 
-// Cria o Web App Linux com Container
-resource webApp 'Microsoft.Web/sites@2022-03-01' = {
-  name: webAppName
-  location: resourceGroup().location
-  kind: 'app,linux,container'
-  properties: {
-    serverFarmId: appServicePlan.id
-    siteConfig: {
-      // Define a runtime: imagem docker
-      linuxFxVersion: 'DOCKER|${imageName}'
-      // Se usares registro privado, configura credenciais
-      {% if containerRegistryUrl != '' %}
-      acrUseManagedIdentityCreds: false
-      acrPullUserName: containerRegistryUsername
-      acrPullPassword: containerRegistryPassword
-      {% else %}
-      // nada extra se imagem pública no Docker Hub
-      {% endif %}
-      // Outras definições, p.ex. alwaysOn, etc.
-      alwaysOn: true
-      // Se quiseres variáveis de ambiente:
-      appSettings: [
-        // Se houver SAS token e storageAccountName/containerName, podes definir uma setting
-        // p.ex. STORAGE_SAS_URL = "https://<storageAccount>.blob.core.windows.net/<container>?<SAS>"
-        // Só define se tiveres parâmetros não vazios:
-        // Nota: fazer condicional em Bicep numa lista é verboso; uma estratégia é construir array
-      ]
-    }
+// Preparar arrays condicionais para appSettings
+var registrySettings = (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') ? [
+  {
+    name: 'DOCKER_REGISTRY_SERVER_URL'
+    value: containerRegistryUrl
   }
-  identity: {
-    type: 'SystemAssigned'
+  {
+    name: 'DOCKER_REGISTRY_SERVER_USERNAME'
+    value: containerRegistryUsername
   }
-}
+  {
+    name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
+    value: containerRegistryPassword
+  }
+] : []
 
-// Exemplo de como construir appSettings condicionalmente:
-var settings = [
-  // Sempre podes definir outras settings fixas aqui
+var sasSettings = [
+  {
+    name: 'CONTAINER_SAS_TOKEN'
+    value: containerSasToken
+  }
 ]
 
-var storageSettingName = 'STORAGE_SAS_URL'
-var storageSasUrl = (storageAccountName != '' && containerName != '' && containerSasToken != '')
-  ? 'https://${storageAccountName}.blob.core.windows.net/${containerName}?${containerSasToken}'
-  : ''
+// Porta do Flask
+var portSetting = [
+  {
+    name: 'WEBSITES_PORT'
+    value: '5000'
+  }
+]
 
-// Se storageSasUrl não for vazio, adiciona ao array de settings
-var appSettingsCombined = (storageSasUrl != '')
-  ? union(settings, [
-      {
-        name: storageSettingName
-        value: storageSasUrl
-      }
-    ])
-  : settings
+// URL completa do container com SAS, usando environment().suffixes.storage para evitar hardcode
+var blobEndpointSuffix = environment().suffixes.storage
+var urlWithSas = 'https://${storageAccountName}.blob${blobEndpointSuffix}/${containerName}?${containerSasToken}'
+var urlSetting = [
+  {
+    name: 'CONTAINER_URL_WITH_SAS'
+    value: urlWithSas
+  }
+]
 
-// Agora, refaz o resource webApp mas usando appSettingsCombined
-resource webAppWithSettings 'Microsoft.Web/sites@2022-03-01' = {
+// Combina appSettings
+var appSettingsCombined = concat(registrySettings, sasSettings, portSetting, urlSetting)
+
+// Web App para container Docker
+resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
-  location: resourceGroup().location
-  kind: 'app,linux,container'
+  location: location
+  kind: 'app,linux'
   properties: {
-    serverFarmId: appServicePlan.id
+    serverFarmId: existingPlan.id
     siteConfig: {
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
-      appSettings: [
-        for setting in appSettingsCombined: {
-          name: setting.name
-          value: setting.value
-        }
-      ]
-      {% if containerRegistryUrl != '' %}
-      acrUseManagedIdentityCreds: false
-      acrPullUserName: containerRegistryUsername
-      acrPullPassword: containerRegistryPassword
-      {% endif %}
+      appSettings: appSettingsCombined
     }
   }
-  identity: {
-    type: 'SystemAssigned'
-  }
+  dependsOn: [
+    existingPlan
+  ]
 }
 
-// NOTA: não tentar fazer role assignment aqui em Bicep, pois principalId não é conhecido no início.
-// Se createRoleAssignment == true, aconselha-se a fazer via CLI ou script pós-deploy.
-// Por exemplo, no workflow PowerShell/Bash: 
-//   PRINCIPAL_ID=$(az webapp show ... --query identity.principalId -o tsv)
-//   STORAGE_ID=$(az storage account show ... --query id -o tsv)
-//   az role assignment create --assignee-object-id $PRINCIPAL_ID --role Contributor --scope $STORAGE_ID
-
-// Outputs úteis:
 output webAppDefaultHostName string = webApp.properties.defaultHostName
-output principalId string = webApp.identity.principalId
+output webAppResourceId string = webApp.id

@@ -1,21 +1,9 @@
-@description('Nome do App Service Plan')
 param planName string
-
-@description('Localização (default resourceGroup().location)')
-param location string = resourceGroup().location
-
-@description('Tier do SKU, ex: Basic, Standard, Premium')
 param skuTier string
-
-@description('Nome do SKU, ex: B1, B2, S1, P1v2, etc.')
 param skuName string
-
-@description('Capacidade (instâncias)')
-@minValue(1)
-param capacity int = 1
-
-@description('É Linux? true para Linux, false para Windows')
+param capacity int
 param isLinux bool = true
+param location string = resourceGroup().location
 
 resource plan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: planName
@@ -26,6 +14,8 @@ resource plan 'Microsoft.Web/serverfarms@2022-03-01' = {
     capacity: capacity
   }
   properties: {
-    reserved: isLinux  // true para Linux
+    reserved: isLinux
   }
 }
+
+output appServicePlanId string = plan.id

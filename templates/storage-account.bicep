@@ -1,47 +1,53 @@
-@description('Nome da Storage Account (único globalmente)')
 param storageAccountName string
-
-@description('Localização do recurso (por defeito, usa a do Resource Group)')
+param containerName string
+param enableBlobVersioning bool = false
+param blobSoftDeleteDays int = 0
 param location string = resourceGroup().location
 
-@description('Nome do container')
-param containerName string
-
-@description('Ativar versioning?')
-param enableBlobVersioning bool = false
-
-@description('Dias de soft delete se versioning ativado')
-@minValue(1)
-param blobSoftDeleteDays int = 7
-
-resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
+resource sa 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: storageAccountName
   location: location
-  sku: { name: 'Standard_LRS' }
+  sku: {
+    name: 'Standard_LRS'
+  }
   kind: 'StorageV2'
   properties: {
-    minimumTlsVersion: 'TLS1_2'
+    accessTier: 'Hot'
     allowBlobPublicAccess: false
     supportsHttpsTrafficOnly: true
   }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01' = {
-  parent: storageAccount
-  name: 'default'
-  properties: {
-    isVersioningEnabled: enableBlobVersioning
-    deleteRetentionPolicy: {
-      enabled: enableBlobVersioning
-      days: enableBlobVersioning ? blobSoftDeleteDays : 0
-    }
-  }
-}
-
-resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-04-01' = {
-  parent: blobService
-  name: containerName
+resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2022-09-01' = {
+  parent: sa
+  name: 'default/${containerName}'
   properties: {
     publicAccess: 'None'
   }
+  dependsOn: [
+    sa
+  ]
 }
+
+var configureVersioning = enableBlobVersioning
+var configureSoftDelete = blobSoftDeleteDays > 0
+
+resource bs 'Microsoft.Storage/storageAccounts/blobServices@2022-09-01' = if (configureVersioning || configureSoftDelete) {
+  parent: sa
+  name: 'default'
+  properties: {
+    isVersioningEnabled: configureVersioning
+    deleteRetentionPolicy: configureSoftDelete ? {
+      enabled: true
+      days: blobSoftDeleteDays
+    } : {
+      enabled: false
+    }
+  }
+  dependsOn: [
+    sa
+  ]
+}
+
+output storageAccountId string = sa.id
+output blobContainerId string = blobContainer.id

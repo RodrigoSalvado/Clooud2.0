@@ -1,23 +1,12 @@
-@description('Nome da Cosmos Account (globalmente único). Se vazio, não cria.')
-param cosmosAccountName string = ''
+param cosmosAccountName string
+param cosmosLocation string
+param cosmosDatabaseName string
+param cosmosContainerName string
+param cosmosPartitionKeyPath string
+param cosmosThroughput int
+// location default do RG será usado no recurso pai se omitido
 
-@description('Localização para a Cosmos Account (default: location do RG)')
-param cosmosLocation string = resourceGroup().location
-
-@description('Nome da base de dados SQL')
-param cosmosDatabaseName string = 'RedditApp'
-
-@description('Nome do container')
-param cosmosContainerName string = 'posts'
-
-@description('Partition key path, ex: \'/id\'')
-param cosmosPartitionKeyPath string = '/id'
-
-@description('Throughput (RU/s), mínimo 400')
-@minValue(400)
-param cosmosThroughput int = 400
-
-resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (cosmosAccountName != '') {
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = {
   name: cosmosAccountName
   location: cosmosLocation
   kind: 'GlobalDocumentDB'
@@ -36,7 +25,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (
   }
 }
 
-resource cosmosSqlDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04-15' = if (cosmosAccountName != '') {
+resource sqlDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04-15' = {
   parent: cosmosAccount
   name: cosmosDatabaseName
   properties: {
@@ -47,10 +36,13 @@ resource cosmosSqlDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04
       throughput: cosmosThroughput
     }
   }
+  dependsOn: [
+    cosmosAccount
+  ]
 }
 
-resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2021-04-15' = if (cosmosAccountName != '') {
-  parent: cosmosSqlDb
+resource sqlContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2021-04-15' = {
+  parent: sqlDatabase
   name: cosmosContainerName
   properties: {
     resource: {
@@ -65,6 +57,14 @@ resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
         indexingMode: 'consistent'
       }
     }
-    options: {}
+    options: {
+      // throughput específico se for o caso
+    }
   }
+  dependsOn: [
+    sqlDatabase
+  ]
 }
+
+output cosmosAccountEndpoint string = cosmosAccount.properties.documentEndpoint
+output cosmosAccountKey string = listKeys(cosmosAccount.id, cosmosAccount.apiVersion).primaryMasterKey
