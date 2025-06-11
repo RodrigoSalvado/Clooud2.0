@@ -7,29 +7,36 @@ on:
       - master
 
 permissions:
-  id-token: write      
-  contents: read       
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout do repositório
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
+      # 2. Login no Azure via OIDC
       - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}         
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}         
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}  
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Validar Bicep (build/compilação)
+      # 3. Validar todos os templates Bicep
+      - name: Validar templates Bicep
         run: |
-          az bicep install || true   # instala Bicep CLI se não existir
+          az bicep install || true
           az bicep build --file templates/resource-group.bicep
+          az bicep build --file templates/storage-account.bicep
+          az bicep build --file templates/app-service-plan.bicep
+          az bicep build --file templates/web-app.bicep
 
+      # 4. Deploy do Resource Group (escopo de subscrição)
       - name: Deploy Resource Group
         uses: azure/cli@v1
         with:
@@ -38,7 +45,8 @@ jobs:
               --location westeurope \
               --template-file templates/resource-group.bicep \
               --parameters rgName='MiniProjetoCloud2.0' location='westeurope'
-    
+
+      # 5. Deploy da Storage Account + container
       - name: Deploy Storage + Container
         uses: azure/cli@v1
         with:
@@ -48,6 +56,7 @@ jobs:
               --template-file templates/storage-account.bicep \
               --parameters storageAccountName='miniprojetostorage20' containerName='reddit-posts'
 
+      # 6. Deploy do App Service Plan
       - name: Deploy App Service Plan
         uses: azure/cli@v1
         with:
@@ -61,14 +70,14 @@ jobs:
                           capacity=1 \
                           isLinux=true
 
+      # 7. Gerar User Delegation SAS para o container
       - name: Gerar User Delegation SAS para o container
         id: gen_sas
         run: |
           ACCOUNT_NAME="miniprojetostorage20"
           CONTAINER_NAME="reddit-posts"
-          # Expiração em UTC (máximo 7 dias). Aqui 1 dia; ajusta conforme precisares.
+          # Definir expiração em UTC (máximo 7 dias); aqui 1 dia
           EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
-          # Gera SAS com permissões read, add, create, list, delete: racld
           sasToken=$(az storage container generate-sas \
             --account-name $ACCOUNT_NAME \
             --name $CONTAINER_NAME \
@@ -80,7 +89,8 @@ jobs:
             -o tsv)
           echo "containerSasToken=$sasToken" >> $GITHUB_OUTPUT
 
-      - name: Deploy Web App com SAS na app settings
+      # 8. Deploy do Web App com SAS nas App Settings
+      - name: Deploy Web App com SAS na App Settings
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -88,4 +98,5 @@ jobs:
               --resource-group MiniProjetoCloud2.0 \
               --template-file templates/web-app.bicep \
               --parameters webAppName='minhaapp-rodrig0salv' \
+                           imageName='rodrig0salv/minha-app:latest' \
                            containerSasToken='${{ steps.gen_sas.outputs.containerSasToken }}'
