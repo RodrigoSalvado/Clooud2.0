@@ -1,13 +1,9 @@
-targetScope = 'subscription'
+@description('Nome do Resource Group a criar')
+param rgName string
 
-// Parâmetros
-@minLength(1)
-param rgName string = 'MiniProjetoCloud2.0'
+@description('Localização do Resource Group')
+param location string = resourceGroup().location
 
-// Define default para a localização, mas permite override via parâmetro
-param location string = 'westeurope'
-
-// Criação do Resource Group no escopo de subscrição
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: rgName
   location: location

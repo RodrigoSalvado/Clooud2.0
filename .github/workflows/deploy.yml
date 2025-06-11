@@ -1,4 +1,4 @@
-name: Deploy Bicep Individualizado
+name: Deploy Bicep Individualizado em France Central
 
 on:
   push:
@@ -17,8 +17,7 @@ jobs:
     env:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
-      COSMOS_PRIMARY_LOCATION: 'westeurope'
-      COSMOS_FALLBACK_LOCATIONS: 'northeurope eastus'
+      # Se quiseres fallback de regiões para Cosmos, atualiza no passo respectivo
 
     steps:
       - name: Checkout do repositório
@@ -34,17 +33,17 @@ jobs:
       - name: Mostrar contexto Azure
         run: az account show
 
-      # 1. Deploy Resource Group (subscription scope)
-      - name: Deploy Resource Group
+      # 1. Deploy Resource Group em France Central (subscription scope)
+      - name: Deploy Resource Group em France Central
         run: |
           az bicep install || true
           az bicep build --file templates/resource-group.bicep
           az deployment sub create \
-            --location westeurope \
+            --location francecentral \
             --template-file templates/resource-group.bicep \
-            --parameters rgName='MiniProjetoCloud2.0' location='westeurope'
+            --parameters rgName='MiniProjetoCloud2.0' location='francecentral'
 
-      # 2. Storage Account + Container
+      # 2. Storage Account + Container (vai herdar location=resourceGroup().location = francecentral)
       - name: Deploy Storage Account + Container
         run: |
           az bicep build --file templates/storage-account.bicep
@@ -57,8 +56,8 @@ jobs:
               enableBlobVersioning=true \
               blobSoftDeleteDays=7
 
-      # 3. Cosmos DB NoSQL (SQL API) - Opcional, com fallback de região
-      - name: Deploy Cosmos DB NoSQL (SQL API) - Opcional
+      # 3. Cosmos DB NoSQL (SQL API) - Opcional com fallback se desejado
+      - name: Deploy Cosmos DB NoSQL (SQL API) - Opcional com fallback
         run: |
           az bicep build --file templates/cosmosdb.bicep
           if [ -z "${COSMOS_ACCOUNT_NAME}" ]; then
@@ -66,20 +65,54 @@ jobs:
             exit 0
           fi
 
-          # Preparar lista de regiões
-          LOCATIONS_TO_TRY=("${COSMOS_PRIMARY_LOCATION}")
+          # Regiões: France Central como primária, depois fallback se necessário
+          COSMOS_PRIMARY_LOCATION='francecentral'
+          COSMOS_FALLBACK_LOCATIONS='northeurope eastus uk southcentralus'
+
+          LOCATIONS_TO_TRY=("$COSMOS_PRIMARY_LOCATION")
           for loc in $COSMOS_FALLBACK_LOCATIONS; do
             LOCATIONS_TO_TRY+=("$loc")
           done
 
+          RG="MiniProjetoCloud2.0"
+          ACCOUNT_NAME="${COSMOS_ACCOUNT_NAME}"
           SUCCESS=false
+
+          # Garante jq
+          if ! command -v jq &>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
           for region in "${LOCATIONS_TO_TRY[@]}"; do
-            echo "Tentando criar/atualizar Cosmos DB em região: $region"
+            echo "=== Tentando criar/atualizar Cosmos DB '${ACCOUNT_NAME}' em região: $region ==="
+            # Verificar se existe e estado
+            EXISTE_JSON=$(az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" -o json 2>/dev/null || echo "")
+            if [ -n "$EXISTE_JSON" ]; then
+              PROV_STATE=$(echo "$EXISTE_JSON" | jq -r '.properties.provisioningState // empty')
+              echo "Conta Cosmos existente detectada com provisioningState: $PROV_STATE"
+              if [ "$PROV_STATE" != "Succeeded" ]; then
+                echo "A conta está em estado '$PROV_STATE'. A eliminar antes de recriar..."
+                az cosmosdb delete --name "$ACCOUNT_NAME" --resource-group "$RG" --yes
+                for i in {1..30}; do
+                  sleep 5
+                  if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
+                    echo "Conta Cosmos removida."
+                    break
+                  fi
+                  echo "Aguardando remoção... ($i)"
+                done
+              else
+                echo "Conta existente em estado Succeeded. Vamos atualizar nessa região: $region"
+                # prosseguir para deployment abaixo
+              fi
+            fi
+
             if az deployment group create \
-                --resource-group MiniProjetoCloud2.0 \
+                --resource-group "$RG" \
                 --template-file templates/cosmosdb.bicep \
                 --parameters \
-                  cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
+                  cosmosAccountName="${ACCOUNT_NAME}" \
                   cosmosLocation="$region" \
                   cosmosDatabaseName='RedditApp' \
                   cosmosContainerName='posts' \
@@ -90,18 +123,16 @@ jobs:
               SUCCESS=true
               break
             else
-              echo "Falha na região $region. A tentar próxima, se existir."
+              echo "Falha na região $region. A tentar próxima..."
             fi
           done
 
           if [ "$SUCCESS" != "true" ]; then
-            echo "Falha em criar Cosmos DB em todas as regiões tentadas: ${LOCATIONS_TO_TRY[*]}"
-            echo "Podes: 1) tentar manualmente outra região; 2) solicitar quota/região; 3) continuar sem Cosmos."
-            # Se quiseres continuar mesmo sem Cosmos, faz exit 0; se for crítico, exit 1:
+            echo "❌ Falha em criar Cosmos DB em todas as regiões tentadas: ${LOCATIONS_TO_TRY[*]}"
             exit 1
           fi
 
-      # 4. App Service Plan
+      # 4. App Service Plan (herda location RG = francecentral)
       - name: Deploy App Service Plan
         run: |
           az bicep build --file templates/app-service-plan.bicep
@@ -115,7 +146,7 @@ jobs:
               capacity=1 \
               isLinux=true
 
-      # 5. Gerar SAS token para Storage (opcional)
+      # 5. Gerar SAS token (opcional)
       - name: Gerar SAS token para Storage (opcional)
         id: gen_sas
         run: |
@@ -134,7 +165,7 @@ jobs:
           echo "SAS token gerado."
           echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      # 6. Web App
+      # 6. Web App (herda RG=francecentral)
       - name: Deploy Web App
         run: |
           az bicep build --file templates/web-app.bicep
@@ -157,7 +188,7 @@ jobs:
               containerRegistryPassword='' \
               createRoleAssignment=false
 
-      # 7. Mostrar outputs finais
+      # 7. Mostrar outputs
       - name: Mostrar outputs do deploy
         run: |
           DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)

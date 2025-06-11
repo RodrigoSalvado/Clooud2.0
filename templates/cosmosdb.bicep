@@ -1,23 +1,22 @@
-@description('Nome da Cosmos Account (globalmente único). Se vazio, não cria Cosmos DB.')
+@description('Nome da Cosmos Account (globalmente único). Se vazio, não cria.')
 param cosmosAccountName string = ''
 
-@description('Localização para a Cosmos Account. Se não fornecido, usa a do resource group.')
+@description('Localização para a Cosmos Account (default: location do RG)')
 param cosmosLocation string = resourceGroup().location
 
-@description('Nome da base de dados SQL a criar (SQL API)')
+@description('Nome da base de dados SQL')
 param cosmosDatabaseName string = 'RedditApp'
 
-@description('Nome do container na Cosmos DB')
+@description('Nome do container')
 param cosmosContainerName string = 'posts'
 
-@description('Caminho da partition key, ex: \'/id\'')
+@description('Partition key path, ex: \'/id\'')
 param cosmosPartitionKeyPath string = '/id'
 
-@description('Throughput manual para a base de dados (RU/s)')
+@description('Throughput (RU/s), mínimo 400')
 @minValue(400)
 param cosmosThroughput int = 400
 
-// Se cosmosAccountName estiver vazio, nada disto será criado
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (cosmosAccountName != '') {
   name: cosmosAccountName
   location: cosmosLocation
@@ -34,11 +33,9 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' = if (
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
-    // Podes adicionar networkAcls ou outras propriedades conforme necessidade
   }
 }
 
-// Base de dados SQL dentro da Cosmos Account
 resource cosmosSqlDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04-15' = if (cosmosAccountName != '') {
   parent: cosmosAccount
   name: cosmosDatabaseName
@@ -52,7 +49,6 @@ resource cosmosSqlDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04
   }
 }
 
-// Container dentro da base de dados SQL
 resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2021-04-15' = if (cosmosAccountName != '') {
   parent: cosmosSqlDb
   name: cosmosContainerName
