@@ -1,40 +1,32 @@
-targetScope = 'resourceGroup'
+@description('Nome do App Service Plan')
+param planName string
 
-@minLength(1)
-@maxLength(40)
-param planName string = 'ASP-MiniProjetoCloud2.0'
-
-@description('Localização. Por defeito, usa a localização do Resource Group.')
+@description('Localização (default resourceGroup().location)')
 param location string = resourceGroup().location
 
-@allowed([
-  'Free'
-  'Shared'
-  'Basic'
-  'Standard'
-  'PremiumV2'
-  'PremiumV3'
-  'ElasticPremium'
-  'Isolated'
-])
-param skuTier string = 'Basic'
+@description('Tier do SKU, ex: Basic, Standard, Premium')
+param skuTier string
 
-@description('Nome do SKU dentro do Tier. Para B2, usa "B2".')
-param skuName string = 'B2'
+@description('Nome do SKU, ex: B1, B2, S1, P1v2, etc.')
+param skuName string
 
+@description('Capacidade (instâncias)')
 @minValue(1)
 param capacity int = 1
 
-@description('Se true, cria Plano Linux.')
+@description('É Linux? true para Linux, false para Windows')
 param isLinux bool = true
 
-resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' = {
+resource plan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: planName
   location: location
-  sku: { tier: skuTier; name: skuName; capacity: capacity }
-  kind: isLinux ? 'linux' : 'app'
-  properties: { reserved: isLinux }
+  sku: {
+    name: skuName
+    tier: skuTier
+    capacity: capacity
+  }
+  properties: {
+    reserved: isLinux  // reservada = true para Linux
+    // Se Windows: reserved=false
+  }
 }
-
-output appServicePlanId string = appServicePlan.id
-output appServicePlanName string = appServicePlan.name

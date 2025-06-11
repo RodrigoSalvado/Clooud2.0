@@ -1,4 +1,4 @@
-name: Deploy Bicep Unificado sem VNet (com Cosmos DB)
+name: Deploy Bicep Individualizado
 
 on:
   push:
@@ -12,20 +12,17 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     env:
-      # Nome da Cosmos Account (poderá vir de secrets ou variáveis do repositório)
-      COSMOS_ACCOUNT_NAME: cosmosprojeto
-      # Throughput para Cosmos DB
+      # Se preferires, define aqui ou via secrets:
+      COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
 
     steps:
-      # 1. Checkout do repositório
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
-      # 2. Login no Azure via OIDC
       - name: Login no Azure com Login v2 (OIDC)
         uses: azure/login@v2
         with:
@@ -33,84 +30,110 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # 3. Mostrar contexto Azure
       - name: Mostrar contexto Azure
         run: az account show
 
-      # 4. Validar main.bicep
-      - name: Validar main.bicep
+      # 1. Criar Resource Group (subscription scope)
+      - name: Deploy Resource Group
         run: |
           az bicep install || true
-          az bicep build --file templates/main.bicep
+          az bicep build --file templates/resource-group.bicep
+          az deployment sub create \
+            --location westeurope \
+            --template-file templates/resource-group.bicep \
+            --parameters rgName='MiniProjetoCloud2.0' location='westeurope'
 
-      # 5. Criar Resource Group se não existir
-      - name: Criar Resource Group se não existir
+      # 2. Storage Account + Container
+      - name: Deploy Storage Account + Container
         run: |
-          az group create --name MiniProjetoCloud2.0 --location westeurope
-
-      # 6. What-If Deploy (opcional)
-      - name: What-If Deploy (opcional)
-        run: |
-          az deployment group what-if \
-            --resource-group MiniProjetoCloud2.0 \
-            --template-file templates/main.bicep \
-            --parameters \
-              storageAccountName=miniProjetostorage20 \
-              containerName=reddit-posts \
-              enableBlobVersioning=true \
-              blobSoftDeleteDays=7 \
-              cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
-              cosmosDatabaseName=RedditApp \
-              cosmosContainerName=posts \
-              cosmosPartitionKeyPath=/id \
-              cosmosThroughput=${COSMOS_THROUGHPUT} \
-              planName=ASP-MiniProjetoCloud2.0 \
-              skuTier=Basic \
-              skuName=B2 \
-              capacity=1 \
-              isLinux=true \
-              webAppName=minhaapp-rodrig0salv \
-              imageName=rodrig0salv/minha-app:latest \
-              containerSasToken='' \
-              containerRegistryUrl='' \
-              containerRegistryUsername='' \
-              containerRegistryPassword='' \
-              createRoleAssignment=false \
-            --only-show-errors
-
-      # 7. Deploy Unificado via CLI direto
-      - name: Deploy Unificado via az CLI
-        run: |
-          set -euxo pipefail
-          echo "Iniciar deploy unificado..."
+          az bicep build --file templates/storage-account.bicep
           az deployment group create \
             --resource-group MiniProjetoCloud2.0 \
-            --template-file templates/main.bicep \
+            --template-file templates/storage-account.bicep \
             --parameters \
-              storageAccountName=miniProjetostorage20 \
-              containerName=reddit-posts \
+              storageAccountName='miniprojetostorage20' \
+              containerName='reddit-posts' \
               enableBlobVersioning=true \
-              blobSoftDeleteDays=7 \
-              cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
-              cosmosDatabaseName=RedditApp \
-              cosmosContainerName=posts \
-              cosmosPartitionKeyPath=/id \
-              cosmosThroughput=${COSMOS_THROUGHPUT} \
-              planName=ASP-MiniProjetoCloud2.0 \
-              skuTier=Basic \
-              skuName=B2 \
+              blobSoftDeleteDays=7
+
+      # 3. Cosmos DB (opcional, só se COSMOS_ACCOUNT_NAME não vazio)
+      - name: Deploy Cosmos DB NoSQL (SQL API) - Opcional
+        run: |
+          az bicep build --file templates/cosmosdb.bicep
+          if [ -n "${COSMOS_ACCOUNT_NAME}" ]; then
+            az deployment group create \
+              --resource-group MiniProjetoCloud2.0 \
+              --template-file templates/cosmosdb.bicep \
+              --parameters \
+                cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
+                cosmosLocation='westeurope' \
+                cosmosDatabaseName='RedditApp' \
+                cosmosContainerName='posts' \
+                cosmosPartitionKeyPath='/id' \
+                cosmosThroughput=${COSMOS_THROUGHPUT}
+          else
+            echo "Pular criação do Cosmos DB pois COSMOS_ACCOUNT_NAME está vazio."
+          fi
+
+      # 4. App Service Plan
+      - name: Deploy App Service Plan
+        run: |
+          az bicep build --file templates/app-service-plan.bicep
+          az deployment group create \
+            --resource-group MiniProjetoCloud2.0 \
+            --template-file templates/app-service-plan.bicep \
+            --parameters \
+              planName='ASP-MiniProjetoCloud2.0' \
+              skuTier='Basic' \
+              skuName='B2' \
               capacity=1 \
-              isLinux=true \
-              webAppName=minhaapp-rodrig0salv \
-              imageName=rodrig0salv/minha-app:latest \
-              containerSasToken='' \
+              isLinux=true
+
+      # 5. (Opcional) Gerar SAS token para o container
+      - name: Gerar SAS token para Storage (opcional)
+        id: gen_sas
+        run: |
+          ACCOUNT_NAME="miniprojetostorage20"
+          CONTAINER_NAME="reddit-posts"
+          EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
+          sasToken=$(az storage container generate-sas \
+            --account-name $ACCOUNT_NAME \
+            --name $CONTAINER_NAME \
+            --permissions racld \
+            --expiry $EXPIRY \
+            --https-only \
+            --auth-mode login \
+            --as-user \
+            -o tsv)
+          echo "SAS token gerado."
+          echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
+
+      # 6. Web App
+      - name: Deploy Web App
+        run: |
+          az bicep build --file templates/web-app.bicep
+          # Decide se usar o SAS gerado ou vazio:
+          if [ -n "${{ steps.gen_sas.outputs.SAS_TOKEN }}" ]; then
+            TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
+          else
+            TOKEN=""
+          fi
+          az deployment group create \
+            --resource-group MiniProjetoCloud2.0 \
+            --template-file templates/web-app.bicep \
+            --parameters \
+              webAppName='minhaapp-rodrig0salv' \
+              planName='ASP-MiniProjetoCloud2.0' \
+              imageName='rodrig0salv/minha-app:latest' \
+              containerSasToken="${TOKEN}" \
+              storageAccountName='miniprojetostorage20' \
+              containerName='reddit-posts' \
               containerRegistryUrl='' \
               containerRegistryUsername='' \
               containerRegistryPassword='' \
-              createRoleAssignment=false \
-            --only-show-errors
+              createRoleAssignment=false
 
-      # 8. Mostrar outputs do deploy
+      # 7. Mostrar outputs
       - name: Mostrar outputs do deploy
         run: |
           DEPLOY_NAME=$(az deployment group list --resource-group MiniProjetoCloud2.0 --query '[0].name' -o tsv)

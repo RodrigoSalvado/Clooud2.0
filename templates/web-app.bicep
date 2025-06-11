@@ -1,103 +1,109 @@
-targetScope = 'resourceGroup'
-
-@minLength(1)
-@maxLength(40)
-@description('Nome do App Service Plan existente.')
-param planName string = 'ASP-MiniProjetoCloud2.0'
-
-@minLength(2)
-@maxLength(60)
-@description('Nome do Web App (globalmente único).')
+@description('Nome da Web App')
 param webAppName string
 
-@description('Localização. Por defeito, usa a localização do Resource Group.')
+@description('Localização (default resourceGroup().location)')
 param location string = resourceGroup().location
 
-@description('Nome da imagem Docker a usar, ex.: "rodrig0salv/minha-app:latest".')
-param imageName string = 'rodrig0salv/minha-app:latest'
+@description('Nome do App Service Plan existente')
+param planName string
 
-@description('Se a imagem Docker estiver num registo privado, passa aqui o URL; caso público, deixa vazio.')
-param containerRegistryUrl string = ''
-@description('Username para registo privado; caso público, deixa vazio.')
-param containerRegistryUsername string = ''
-@secure()
-@description('Password/secreto para registo privado; caso público, deixa vazio.')
-param containerRegistryPassword string = ''
+@description('Imagem Docker a usar, ex: "meuuser/minha-app:latest"')
+param imageName string
 
-@secure()
-@description('Opcional: SAS token para o container de Storage, sem "?" inicial. Se usar Managed Identity, podes passar vazio.')
+@description('Token SAS para Storage (opcional). Se vazio, não adiciona.')
 param containerSasToken string = ''
 
-@minLength(3)
-@maxLength(24)
-@description('Nome da Storage Account usada no Private Endpoint ou para montar URL completa, ex.: "miniprojetostorage20".')
-param storageAccountName string = 'miniprojetostorage20'
+@description('Nome da Storage Account (opcional). Se vazio, não adiciona.')
+param storageAccountName string = ''
 
-@minLength(3)
-@maxLength(63)
-@description('Nome do container em Storage Account, ex.: "reddit-posts".')
-param containerName string = 'reddit-posts'
+@description('Nome do container no Storage (opcional). Se vazio, não adiciona.')
+param containerName string = ''
 
-@minLength(1)
-@maxLength(40)
-@description('Nome da VNet existente para VNet Integration.')
-param vnetName string = 'myVNet'
+@description('URL do registry privado, ex: "https://myregistry.azurecr.io" (opcional). Se vazio, não adiciona.')
+param containerRegistryUrl string = ''
 
-@minLength(1)
-@maxLength(24)
-@description('Nome da subnet privada na VNet para VNet Integration (Regional).')
-param subnetName string = 'private-subnet'
+@description('Username do registry (opcional).')
+param containerRegistryUsername string = ''
 
-resource existingPlan 'Microsoft.Web/serverfarms@2022-03-01' existing = { name: planName }
+@description('Password do registry (opcional).')
+param containerRegistryPassword string = ''
 
+// Cria o Web App
 resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
   location: location
-  kind: 'app,linux'
+  kind: 'app,linux,container'
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
-    serverFarmId: existingPlan.id
+    serverFarmId: resourceId('Microsoft.Web/serverfarms', planName)
     siteConfig: {
-      linuxFxVersion: 'DOCKER|${imageName}'
-      alwaysOn: true
-      appSettings: concat(
-        (containerRegistryUrl != '' && containerRegistryUsername != '' && containerRegistryPassword != '') ? [
-          { name: 'DOCKER_REGISTRY_SERVER_URL'; value: containerRegistryUrl }
-          { name: 'DOCKER_REGISTRY_SERVER_USERNAME'; value: containerRegistryUsername }
-          { name: 'DOCKER_REGISTRY_SERVER_PASSWORD'; value: containerRegistryPassword }
-        ] : [],
-        [ { name: 'WEBSITES_PORT'; value: '5000' } ],
-        (containerSasToken != '') ? [ { name: 'CONTAINER_SAS_TOKEN'; value: containerSasToken } ] : [],
-        (containerSasToken != '') ? [ { name: 'CONTAINER_URL_WITH_SAS'; value: 'https://${storageAccountName}.blob${environment().suffixes.storage}/${containerName}?${containerSasToken}' } ] : []
-      )
+      linuxFxVersion: 'DOCKER|' + imageName
+      // Desativar integração de arquivo montado se não for necessário:
+      appSettings: [
+        {
+          name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
+          value: 'false'
+        }
+      ]
+        // Acrescentar config de Storage se SAS fornecido:
+        + (containerSasToken != '' ? [
+            {
+              name: 'STORAGE_SAS_TOKEN'
+              value: containerSasToken
+            }
+            ,
+            {
+              name: 'STORAGE_ACCOUNT_NAME'
+              value: storageAccountName
+            }
+            ,
+            {
+              name: 'CONTAINER_NAME'
+              value: containerName
+            }
+        ] : [])
+        // Acrescentar config de registry se fornecido:
+        + (containerRegistryUrl != '' ? [
+            {
+              name: 'DOCKER_REGISTRY_SERVER_URL'
+              value: containerRegistryUrl
+            }
+            ,
+            {
+              name: 'DOCKER_REGISTRY_SERVER_USERNAME'
+              value: containerRegistryUsername
+            }
+            ,
+            {
+              name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
+              value: containerRegistryPassword
+            }
+        ] : [])
     }
   }
-  dependsOn: [ existingPlan ]
 }
 
-resource vnetIntegration 'Microsoft.Web/sites/virtualNetworkConnections@2021-03-01' = {
-  parent: webApp
-  name: subnetName
+// (Opcional) Role Assignment: atribuir à Managed Identity do Web App acesso à Storage. 
+// Só cria se createRoleAssignment = true e se storageAccountName != ''.
+@description('Criar Role Assignment para a Web App Managed Identity na Storage Account?')
+param createRoleAssignment bool = false
+
+resource storageAccountForRole 'Microsoft.Storage/storageAccounts@2022-09-01' existing = if (createRoleAssignment && storageAccountName != '') {
+  name: storageAccountName
+}
+
+// Obter o principalId da identidade do Web App
+var principalId = webApp.identity.principalId
+
+// Atribuir built-in role Storage Blob Data Contributor à identity do Web App na Storage Account
+resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = if (createRoleAssignment && storageAccountName != '') {
+  name: guid(storageAccountForRole.id, principalId, 'StorageBlobDataContributor')
+  scope: storageAccountForRole
   properties: {
-    vnetResourceId: resourceId('Microsoft.Network/virtualNetworks', vnetName)
-  }
-}
-
-resource assignIdentity 'Microsoft.Web/sites@2022-03-01' = {
-  name: webAppName
-  properties: { identity: { type: 'SystemAssigned' } }
-  dependsOn: [ webApp ]
-}
-
-resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
-  name: guid(storageAccountName, 'StorageBlobDataContributor', webApp.identity.principalId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    principalId: webApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe') // Storage Blob Data Contributor
+    principalId: principalId
     principalType: 'ServicePrincipal'
-    scope: resourceId('Microsoft.Storage/storageAccounts', storageAccountName)
   }
-  dependsOn: [ assignIdentity ]
 }
-
-output webAppDefaultHostName string = webApp.properties.defaultHostName
-output webAppResourceId string = webApp.id
