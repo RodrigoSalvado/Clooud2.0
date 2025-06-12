@@ -1,4 +1,4 @@
-@description('Nome do Function App a criar/atualizar')
+@description('Nome do Function App')
 param functionAppName string
 
 @description('Nome da Storage Account existente para AzureWebJobsStorage (GPv2).')
@@ -7,11 +7,7 @@ param storageAccountName string
 @description('Localização para o Function App e plano. Por padrão, usa resourceGroup().location')
 param location string = resourceGroup().location
 
-@secure()
-@description('String de conexão do Storage para AzureWebJobsStorage. Se vazio, será obtida via listKeys da Storage Account existente.')
-param storageConnectionString string = ''
-
-// 1) Plano de Consumo para Function App (Linux Consumption)
+// Plano de Consumo para Function App (Linux Consumption)
 resource functionPlan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: '${functionAppName}-plan'
   location: location
@@ -25,22 +21,16 @@ resource functionPlan 'Microsoft.Web/serverfarms@2022-03-01' = {
   }
 }
 
-// 2) Referência à Storage Account existente, para obter chaves se necessário
+// Referência à Storage Account existente, para obter a chave via resource symbol reference
 resource storageAccountExisting 'Microsoft.Storage/storageAccounts@2022-09-01' existing = {
   name: storageAccountName
 }
 
-// 3) Calcula a connection string do storage:
-//    - Se o parâmetro storageConnectionString for não vazio, usa ele.
-//    - Caso contrário usa listKeys para pegar a primeira key.
-var storageKey = empty(storageConnectionString) 
-  ? listKeys(storageAccountExisting.name, storageAccountExisting.apiVersion).keys[0].value 
-  : ''
-var storageConn = empty(storageConnectionString)
-  ? 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};AccountKey=${storageKey};EndpointSuffix=${environment().suffixes.storage}'
-  : storageConnectionString
+// Usa resource symbol reference para obter keys
+var storageKey = storageAccountExisting.listKeys().keys[0].value
+var storageConn = 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};AccountKey=${storageKey};EndpointSuffix=${environment().suffixes.storage}'
 
-// 4) Cria o Function App sem Application Insights
+// Cria o Function App em Linux, runtime Python
 resource functionApp 'Microsoft.Web/sites@2022-03-01' = {
   name: functionAppName
   location: location
@@ -51,29 +41,25 @@ resource functionApp 'Microsoft.Web/sites@2022-03-01' = {
   properties: {
     serverFarmId: functionPlan.id
     siteConfig: {
-      // Runtime Python; ajuste a versão conforme necessidade (3.9, 3.10, etc.)
+      // Runtime Python 3.9; ajuste se precisar outra versão suportada
       linuxFxVersion: 'PYTHON|3.9'
       appSettings: [
         {
           name: 'FUNCTIONS_WORKER_RUNTIME'
           value: 'python'
-        },
+        }
         {
           name: 'AzureWebJobsStorage'
           value: storageConn
-        },
+        }
         {
           name: 'WEBSITE_RUN_FROM_PACKAGE'
           value: '1'
         }
-        // Se precisar de outras configurações, acrescente mais itens aqui, sempre separando com vírgula
       ]
     }
   }
-  dependsOn: [
-    functionPlan
-    // não há dependência de Insights aqui
-  ]
+  // Não precisa de dependsOn explícito em functionPlan, pois Bicep infere via functionPlan.id
 }
 
 // Outputs úteis
