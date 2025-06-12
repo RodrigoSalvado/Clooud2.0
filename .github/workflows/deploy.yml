@@ -212,8 +212,8 @@ jobs:
               --parameters \
                 functionAppName="$FUNC_NAME" \
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
-              --only-show-errors
             echo "Function App deploy: $DEPLOY_NAME"
+
 
       - name: Atribuir role ao Web App sobre Storage (opcional)
         uses: azure/cli@v1
