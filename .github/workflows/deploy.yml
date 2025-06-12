@@ -18,8 +18,10 @@ jobs:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
-      # Se quiser fixar, pode definir isso em secrets ou em steps antes:
-      # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-MiniProjetoCloud2.0'
+      RG: 'MiniProjetoCloud2.0'
+      TARGET_LOCATION: 'francecentral'
+      # Se você usar um plano existente, pode definir:
+      # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
 
     steps:
       - name: Checkout do repositório
@@ -41,8 +43,6 @@ jobs:
 
       - name: (Re)Criar Resource Group em francecentral
         run: |
-          RG="MiniProjetoCloud2.0"
-          TARGET_LOCATION="francecentral"
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
             echo "Criando RG '$RG' em $TARGET_LOCATION..."
@@ -81,7 +81,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            RG="MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-storage-$(date +%s)"
             echo "Deploy Storage Account: $DEPLOY_NAME"
             az deployment group create \
@@ -100,7 +99,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            RG="MiniProjetoCloud2.0"
             ACCOUNT_NAME="${COSMOS_ACCOUNT_NAME}"
             if [ -z "$ACCOUNT_NAME" ]; then
               echo "Variável COSMOS_ACCOUNT_NAME vazia: pulando Cosmos DB."
@@ -110,7 +108,7 @@ jobs:
             if az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
               echo "Conta Cosmos DB '$ACCOUNT_NAME' já existe em RG '$RG'. Pulando deploy."
             else
-              echo "Conta Cosmos DB '$ACCOUNT_NAME' NÃO existe. Realizando deploy em francecentral..."
+              echo "Conta Cosmos DB '$ACCOUNT_NAME' NÃO existe. Realizando deploy em $TARGET_LOCATION..."
               DEPLOY_NAME="deploy-cosmos-$(date +%s)"
               az deployment group create \
                 --name "$DEPLOY_NAME" \
@@ -118,7 +116,7 @@ jobs:
                 --template-file templates/cosmosdb.bicep \
                 --parameters \
                   cosmosAccountName="$ACCOUNT_NAME" \
-                  cosmosLocation='francecentral' \
+                  cosmosLocation="$TARGET_LOCATION" \
                   cosmosDatabaseName='RedditApp' \
                   cosmosContainerName='posts' \
                   cosmosPartitionKeyPath='/id' \
@@ -131,7 +129,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            RG="MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-asp-web-$(date +%s)"
             echo "Deploy App Service Plan: $DEPLOY_NAME"
             az deployment group create \
@@ -144,6 +141,7 @@ jobs:
                 skuName='B2' \
                 capacity=1 \
                 isLinux=true \
+                location="$TARGET_LOCATION" \
               --only-show-errors
             echo "App Service Plan deploy concluído: $DEPLOY_NAME"
 
@@ -166,11 +164,10 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      - name: Deploy Web App (sem App Insights)
+      - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
         uses: azure/cli@v1
         with:
           inlineScript: |
-            RG="MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-webapp-$(date +%s)"
             WEBAPP_NAME="minhaapp-rodrig0salv"
             PLAN_NAME="ASP-MiniProjetoCloud2.0"
@@ -198,51 +195,32 @@ jobs:
               --only-show-errors
             echo "Web App deploy concluído: $DEPLOY_NAME"
 
-      - name: Deploy Function App em Python (com plano existente)
+      - name: Deploy Function App em Python (sem App Insights)
         uses: azure/cli@v1
         with:
           inlineScript: |
-            RG="MiniProjetoCloud2.0"
-            FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
-            STORAGE_ACCOUNT_NAME="miniprojetostorage20"
-            LOCATION="francecentral"
-            TEMPLATE="templates/function-app.bicep"
-            PLAN_NAME="ASP-MiniProjetoCloud2.0"
-
-            echo "Validando build do Bicep..."
-            az bicep build --file "$TEMPLATE"
-
-            echo "Obtendo resourceId do App Service Plan existente..."
-            PLAN_ID=$(az appservice plan show \
-              --name "$PLAN_NAME" \
-              --resource-group "$RG" \
-              --query id -o tsv)
-            if [ -z "$PLAN_ID" ]; then
-              echo "⚠️ Não foi possível obter resourceId do plano '$PLAN_NAME' no RG '$RG'."
-              exit 1
-            fi
-            echo "Plano existente resourceId: $PLAN_ID"
-
+            # Note: se você estiver usando um plano existente, ajuste existingPlanResourceId para o valor correto,
+            # por ex: "/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-funcapp-$(date +%s)"
-            echo "Deploy Function App ($FUNC_NAME) usando plano existente..."
+            echo "Deploy Function App ($FUNCTIONAPP_NAME) sem App Insights..."
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
-              --template-file "$TEMPLATE" \
+              --template-file templates/function-app.bicep \
               --parameters \
-                functionAppName="$FUNC_NAME" \
-                storageAccountName="$STORAGE_ACCOUNT_NAME" \
-                location="$LOCATION" \
-                existingPlanResourceId="$PLAN_ID" \
-              --only-show-errors \
-              --verbose
-            echo "Function App deploy concluído: $DEPLOY_NAME"
+                functionAppName="$FUNCTIONAPP_NAME" \
+                storageAccountName="miniprojetostorage20" \
+                location="$TARGET_LOCATION" \
+                existingPlanResourceId="/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/MiniProjetoCloud2.0/providers/Microsoft.Web/serverfarms/ASP-MiniProjetoCloud2.0" \
+              --only-show-errors
+            echo "Function App deployment concluído: $DEPLOY_NAME"
+
+
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1
         with:
           inlineScript: |
-            RG="MiniProjetoCloud2.0"
             # Web App outputs
             DEPLOY_WEB_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-webapp-')]|[0].name" -o tsv)
             if [ -n "$DEPLOY_WEB_NAME" ]; then
