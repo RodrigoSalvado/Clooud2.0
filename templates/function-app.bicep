@@ -1,99 +1,53 @@
+// parâmetros básicos
 @description('Nome do Function App a criar/atualizar')
 param functionAppName string
 
-@description('Resource ID do App Service Plan existente (Server Farm). Exemplo: /subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-XYZ')
-param serverFarmId string
-
-@description('Nome da Storage Account existente para AzureWebJobsStorage (GPv2).')
+@description('Nome da Storage Account existente para AzureWebJobsStorage (GPv2). Ex: “mystorageaccount”')
 param storageAccountName string
 
-@description('Connection string para AzureWebJobsStorage (opcional). Se vazio, será obtido via listKeys da Storage Account existente.')
-param storageConnectionString string = ''
+@description('Localização para o Function App e plano. Por padrão, usa resourceGroup().location')
+param location string = resourceGroup().location
 
-@description('URL do blob container ou do pacote para deployment (opcional). Exemplo: "https://<account>.blob.core.windows.net/app-package-<nome>?<sasToken>". Se vazio, não configura deployment automático.')
-param packageContainerUrl string = ''
+@description('Resource ID de um App Service Plan existente que queira usar. Se vazio, será criado um novo plano de Consumo Linux automaticamente.')
+param existingPlanResourceId string = ''
 
-var location = resourceGroup().location
+// (Opcional) Se você quiser aceitar parâmetro de connection string em vez de pegar via listKeys:
+//@secure()
+//param storageConnectionString string = ''
 
-// Referência à Storage Account existente, para obter chaves se necessário
+// Referência à Storage Account existente, para obter a connection string se necessário:
 resource storageAccountExisting 'Microsoft.Storage/storageAccounts@2022-09-01' existing = {
   name: storageAccountName
 }
 
-// Calcula connection string do storage:
-// - se storageConnectionString for informado (não vazio), usa ele diretamente;
-// - caso contrário, obtém a primeira key via listKeys e monta DefaultEndpointsProtocol.
-var storageKey = empty(storageConnectionString) 
-  ? listKeys(storageAccountExisting.id, storageAccountExisting.apiVersion).keys[0].value 
-  : ''
-var finalStorageConn = empty(storageConnectionString) 
-  ? 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};AccountKey=${storageKey};EndpointSuffix=${environment().suffixes.storage}' 
-  : storageConnectionString
+// (Opcional) obter connection string se você preferir ler a partir de listKeys. 
+// Aqui assumimos que você deseja usar identity para acesso ou connection string passada externamente.
+// Se quiser pegar via listKeys, descomente e adapte abaixo:
+// var storageKey = listKeys(storageAccountExisting.name, storageAccountExisting.apiVersion).keys[0].value
+// var storageConn = 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};AccountKey=${storageKey};EndpointSuffix=${environment().suffixes.storage}'
 
-// Bloco runtime e escala
-var runtimeBlock = {
-  name: 'python'
-  version: '3.11'
-}
-var scaleBlock = {
-  maximumInstanceCount: 100
-  instanceMemoryMB: 1536
-}
-
-// Monta functionAppConfig condicionalmente, com ou sem deployment via blob container
-var functionAppConfig = empty(packageContainerUrl) ? {
-  runtime: runtimeBlock
-  scaleAndConcurrency: scaleBlock
-} : {
-  runtime: runtimeBlock
-  deployment: {
-    storage: {
-      type: 'blobcontainer'
-      value: packageContainerUrl
-      authentication: {
-        type: 'storageaccountconnectionstring'
-        // Nome da app setting que conterá a connection string
-        storageAccountConnectionStringName: 'DEPLOYMENT_STORAGE_CONNECTION_STRING'
-      }
-    }
+//
+// Criação condicional do App Service Plan, se existingPlanResourceId está vazio.
+// Assumimos Consumo Linux (SKU Y1).
+//
+resource newFunctionPlan 'Microsoft.Web/serverfarms@2022-03-01' = if (empty(existingPlanResourceId)) {
+  name: '${functionAppName}-plan'
+  location: location
+  kind: 'functionapp'
+  sku: {
+    name: 'Y1'
+    tier: 'Dynamic'
   }
-  scaleAndConcurrency: scaleBlock
+  properties: {
+    reserved: true // indica Linux
+  }
 }
 
-// Monta appSettings: obrigatórios + opcionais para deployment
-var baseSettings = [
-  {
-    name: 'FUNCTIONS_WORKER_RUNTIME'
-    value: 'python'
-  }
-  {
-    name: 'AzureWebJobsStorage'
-    value: finalStorageConn
-  }
-]
+// Determina o resourceId efetivo do plano:
+var planId = empty(existingPlanResourceId) ? newFunctionPlan.id : existingPlanResourceId
 
-// Se quisermos usar Run From Package via blob URL, muitas vezes se define:
-//   WEBSITE_RUN_FROM_PACKAGE = '<url-do-zip-ou-sas-do-blob>'
-// Porém, quando usamos functionAppConfig.deployment.storage do tipo 'blobcontainer', 
-// o próprio serviço pode usar a setting DEPLOYMENT_STORAGE_CONNECTION_STRING.
-// Caso queira setar WEBSITE_RUN_FROM_PACKAGE para URL direta, altere abaixo conforme necessidade.
-var packageSettings = empty(packageContainerUrl) ? [] : [
-  // Define a connection string para DEPLOYMENT_STORAGE_CONNECTION_STRING (usado por functionAppConfig.deployment)
-  {
-    name: 'DEPLOYMENT_STORAGE_CONNECTION_STRING'
-    value: finalStorageConn
-  }
-  // Se preferir usar Run From Package direto com URL do pacote, acrescente algo como:
-  // {
-  //   name: 'WEBSITE_RUN_FROM_PACKAGE'
-  //   value: packageContainerUrl
-  // }
-]
-
-// Concatena todas
-var allAppSettings = concat(baseSettings, packageSettings)
-
-resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
+// Cria o Function App
+resource functionApp 'Microsoft.Web/sites@2022-03-01' = {
   name: functionAppName
   location: location
   kind: 'functionapp,linux'
@@ -101,27 +55,36 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     type: 'SystemAssigned'
   }
   properties: {
-    serverFarmId: serverFarmId
-    enabled: true
-    httpsOnly: true
-    // Configurações de Function App: runtime e, se informado, deployment
-    functionAppConfig: functionAppConfig
+    serverFarmId: planId
     siteConfig: {
-      // appSettings com AzureWebJobsStorage, FUNCTIONS_WORKER_RUNTIME, DEPLOYMENT_STORAGE_CONNECTION_STRING etc.
-      appSettings: allAppSettings
-      // Outros ajustes opcionais:
-      // alwaysOn: true  // em Consumo, alwaysOn não é suportado; deixe false ou omitido.
-      // linuxFxVersion geralmente não é usado para runtime Python no modelo Function: 
-      // para Linux Consumption, o runtimeBlock em functionAppConfig é suficiente.
+      // Exemplo de runtime Python 3.9; ajuste se precisar outra versão suportada
+      linuxFxVersion: 'PYTHON|3.9'
+      appSettings: [
+        {
+          name: 'FUNCTIONS_WORKER_RUNTIME'
+          value: 'python'
+        }
+        {
+          name: 'AzureWebJobsStorage'
+          // Ajuste conforme sua estratégia: usar connection string ou identity-based. 
+          // Aqui exemplificamos pegando via identity + configuração externa, mas você pode preferir connection string:
+          // value: storageConn
+          value: '' // Se usar identity-based ou outra abordagem, deixe vazio ou configure via Key Vault.
+        }
+        {
+          name: 'WEBSITE_RUN_FROM_PACKAGE'
+          value: '1'
+        }
+      ]
     }
   }
-  dependsOn: [
-    // garante que storageAccountExisting exista antes de obter listKeys
-    storageAccountExisting
-  ]
+  // Se criamos novo plano, dependemos dele. Se usamos existingPlanResourceId, não adicionamos dependOn.
+  dependsOn: empty(existingPlanResourceId) ? [
+    newFunctionPlan
+  ] : []
 }
 
 // Outputs úteis
 output functionAppResourceId string = functionApp.id
-output defaultHostName string = functionApp.properties.defaultHostName
-output principalId string = functionApp.identity.principalId
+output functionAppDefaultHostname string = functionApp.properties.defaultHostName
+output functionAppPrincipalId string = functionApp.identity.principalId
