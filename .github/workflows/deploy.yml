@@ -222,8 +222,6 @@ jobs:
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
                 containerName="$CONTAINER_NAME" \
                 containerSasToken="$SAS_TOKEN" \
-                createAppInsights=false \
-                appInsightsName='' \
               --only-show-errors
             echo "Web App deploy: $DEPLOY_NAME"
 

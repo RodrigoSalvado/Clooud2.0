@@ -26,31 +26,12 @@ param containerName string = ''
 @description('SAS token para o container (opcional). Pode estar vazio.')
 param containerSasToken string = ''
 
-@description('Se true, cria um Application Insights novo com nome appInsightsName. Se false, usa AI existente via instrumentation key em appInsightsInstrumentationKey.')
-param createAppInsights bool = false
-
-@description('Nome a usar para Application Insights, se createAppInsights for true. Caso falso, pode deixar vazio.')
-param appInsightsName string = ''
-
-@secure()
-@description('Instrumentation Key de um Application Insights existente, se createAppInsights for false. Caso createAppInsights=true, pode deixar vazio.')
-param appInsightsInstrumentationKey string = ''
-
+// Local do resource group
 var location = resourceGroup().location
 
-resource ai 'microsoft.insights/components@2020-02-02' = if (createAppInsights) {
-  name: appInsightsName
-  location: location
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-  }
-}
+// 1) Construção das App Settings em partes:
 
-var effectiveInstrumentationKey = createAppInsights 
-  ? ai.properties.InstrumentationKey 
-  : (empty(appInsightsInstrumentationKey) ? '' : appInsightsInstrumentationKey)
-
+// 1.1 Base de settings que sempre vão existir:
 var baseSettings = [
   {
     name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
@@ -58,21 +39,22 @@ var baseSettings = [
   }
 ]
 
+// 1.2 Settings de Container Registry, apenas se preenchido:
 var registrySettings = concat(
   [],
-  empty(containerRegistryUrl) ? [] : [
+  containerRegistryUrl == '' ? [] : [
     {
       name: 'DOCKER_REGISTRY_SERVER_URL'
       value: containerRegistryUrl
     }
   ],
-  empty(containerRegistryUsername) ? [] : [
+  containerRegistryUsername == '' ? [] : [
     {
       name: 'DOCKER_REGISTRY_SERVER_USERNAME'
       value: containerRegistryUsername
     }
   ],
-  empty(containerRegistryPassword) ? [] : [
+  containerRegistryPassword == '' ? [] : [
     {
       name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
       value: containerRegistryPassword
@@ -80,21 +62,22 @@ var registrySettings = concat(
   ]
 )
 
+// 1.3 Settings de Storage (opcional):
 var storageSettings = concat(
   [],
-  empty(storageAccountName) ? [] : [
+  storageAccountName == '' ? [] : [
     {
       name: 'STORAGE_ACCOUNT_NAME'
       value: storageAccountName
     }
   ],
-  empty(containerName) ? [] : [
+  containerName == '' ? [] : [
     {
       name: 'CONTAINER_NAME'
       value: containerName
     }
   ],
-  empty(containerSasToken) ? [] : [
+  containerSasToken == '' ? [] : [
     {
       name: 'CONTAINER_SAS_TOKEN'
       value: containerSasToken
@@ -102,21 +85,10 @@ var storageSettings = concat(
   ]
 )
 
-var aiSettings = empty(effectiveInstrumentationKey) 
-  ? [] 
-  : [
-      {
-        name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
-        value: effectiveInstrumentationKey
-      },
-      {
-        name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-        value: 'InstrumentationKey=${effectiveInstrumentationKey}'
-      }
-    ]
+// 1.4 Concatena todas as partes:
+var allAppSettings = concat(baseSettings, registrySettings, storageSettings)
 
-var allAppSettings = concat(baseSettings, registrySettings, storageSettings, aiSettings)
-
+// *** Recurso Web App ***
 resource webApp 'Microsoft.Web/sites@2021-02-01' = {
   name: webAppName
   location: location
@@ -127,13 +99,15 @@ resource webApp 'Microsoft.Web/sites@2021-02-01' = {
   properties: {
     serverFarmId: resourceId('Microsoft.Web/serverfarms', planName)
     siteConfig: {
+      // String interpolation para Linux container:
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
       appSettings: allAppSettings
+      // Outras configurações opcionais podem ser adicionadas aqui
     }
   }
-  dependsOn: createAppInsights ? [ ai ] : []
 }
 
+// Outputs úteis:
 output defaultHostName string = webApp.properties.defaultHostName
 output principalId string = webApp.identity.principalId
