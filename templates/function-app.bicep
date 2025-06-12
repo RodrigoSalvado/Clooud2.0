@@ -57,8 +57,9 @@ resource functionApp 'Microsoft.Web/sites@2022-03-01' = {
   properties: {
     serverFarmId: planId
     siteConfig: {
-      // Exemplo de runtime Python 3.9; ajuste se precisar outra versão suportada
-      linuxFxVersion: 'PYTHON|3.9'
+      // Exemplo de runtime Python 3.11; ajuste se precisar outra versão suportada
+      linuxFxVersion: 'PYTHON|3.11'
+      always_on: true
       appSettings: [
         {
           name: 'FUNCTIONS_WORKER_RUNTIME'
