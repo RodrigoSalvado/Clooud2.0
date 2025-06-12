@@ -206,15 +206,17 @@ jobs:
             DEPLOY_NAME="deploy-funcapp-$(date +%s)"
             FUNC_NAME="$FUNCTIONAPP_NAME"
             STORAGE_ACCOUNT_NAME="miniprojetostorage20"
-            # Se necessário, obtenha o resourceId do App Service Plan do Function:
-            # PLAN_ID=$(az appservice plan show --name ASP-teste-84a9 --resource-group teste --query id -o tsv)
-            PLAN_ID="${FUNCTION_PLAN_RESOURCE_ID:-''}"
+            # Exemplo de como obter ou definir o Resource ID do App Service Plan:
+            # Caso já esteja em env, ok; senão, capture antes e exporte em $GITHUB_ENV.
+            PLAN_ID="${FUNCTION_PLAN_RESOURCE_ID:-}"
             if [ -z "$PLAN_ID" ]; then
-              echo "Resource ID do App Service Plan não fornecido. Ajuste a variável FUNCTION_PLAN_RESOURCE_ID."
+              echo "Resource ID do App Service Plan não fornecido. Ajuste FUNCTION_PLAN_RESOURCE_ID."
               exit 1
             fi
 
             echo "Deploy Function App ($FUNC_NAME) sem App Insights..."
+            # Aqui: terminamos corretamente o comando az deployment e não deixamos o 'echo' colado,
+            # e adicionamos --only-show-errors para não poluir saída.
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
@@ -223,10 +225,11 @@ jobs:
                 functionAppName="$FUNC_NAME" \
                 serverFarmId="$PLAN_ID" \
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
-                storageConnectionString="" \
-                packageContainerUrl="" \
               --only-show-errors
+
+            # Agora o echo é um comando separado
             echo "Function App deploy concluído: $DEPLOY_NAME"
+
 
       - name: Atribuir role ao Web App sobre Storage (opcional)
         uses: azure/cli@v1
