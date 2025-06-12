@@ -36,10 +36,8 @@ param appInsightsName string = ''
 @description('Instrumentation Key de um Application Insights existente, se createAppInsights for false. Caso createAppInsights=true, pode deixar vazio.')
 param appInsightsInstrumentationKey string = ''
 
-// Local do resource group
 var location = resourceGroup().location
 
-// 1) Se precisa criar AI, declaramos o recurso com condicional
 resource ai 'microsoft.insights/components@2020-02-02' = if (createAppInsights) {
   name: appInsightsName
   location: location
@@ -49,16 +47,10 @@ resource ai 'microsoft.insights/components@2020-02-02' = if (createAppInsights) 
   }
 }
 
-// 2) Determina o instrumentation key efetivo:
-//    - Se criamos AI, usamos ai.properties.InstrumentationKey.
-//    - Senão, se o parâmetro for vazio, resulta em string vazia, caso contrário, usa o parâmetro.
 var effectiveInstrumentationKey = createAppInsights 
   ? ai.properties.InstrumentationKey 
   : (empty(appInsightsInstrumentationKey) ? '' : appInsightsInstrumentationKey)
 
-// 3) Construção das App Settings em partes:
-
-// 3.1 Base de settings que sempre vão existir:
 var baseSettings = [
   {
     name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
@@ -66,7 +58,6 @@ var baseSettings = [
   }
 ]
 
-// 3.2 Settings de Container Registry, apenas se preenchido:
 var registrySettings = concat(
   [],
   empty(containerRegistryUrl) ? [] : [
@@ -89,7 +80,6 @@ var registrySettings = concat(
   ]
 )
 
-// 3.3 Settings de Storage (opcional):
 var storageSettings = concat(
   [],
   empty(storageAccountName) ? [] : [
@@ -112,7 +102,6 @@ var storageSettings = concat(
   ]
 )
 
-// 3.4 Settings de Application Insights, somente se tivermos effectiveInstrumentationKey não vazio:
 var aiSettings = empty(effectiveInstrumentationKey) 
   ? [] 
   : [
@@ -122,16 +111,12 @@ var aiSettings = empty(effectiveInstrumentationKey)
       },
       {
         name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-        // Usa string interpolation: 'InstrumentationKey=<valor>'
         value: 'InstrumentationKey=${effectiveInstrumentationKey}'
       }
     ]
 
-// 3.5 Concatena todas as partes:
 var allAppSettings = concat(baseSettings, registrySettings, storageSettings, aiSettings)
 
-
-// *** Recurso Web App ***
 resource webApp 'Microsoft.Web/sites@2021-02-01' = {
   name: webAppName
   location: location
@@ -142,19 +127,13 @@ resource webApp 'Microsoft.Web/sites@2021-02-01' = {
   properties: {
     serverFarmId: resourceId('Microsoft.Web/serverfarms', planName)
     siteConfig: {
-      // String interpolation para Linux container: "DOCKER|<imageName>"
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
       appSettings: allAppSettings
-      // Outras configurações opcionais podem ser adicionadas aqui
     }
   }
-  // Dependência condicional em AI: se criamos AI, espera antes de criar WebApp
-  dependsOn: createAppInsights ? [
-    ai
-  ] : []
+  dependsOn: createAppInsights ? [ ai ] : []
 }
 
-// Outputs úteis:
 output defaultHostName string = webApp.properties.defaultHostName
 output principalId string = webApp.identity.principalId

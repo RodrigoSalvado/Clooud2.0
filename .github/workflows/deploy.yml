@@ -193,7 +193,7 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
+      - name: Deploy Web App (sem App Insights)
         uses: azure/cli@v1
         with:
           inlineScript: |
