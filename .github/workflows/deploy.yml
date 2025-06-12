@@ -18,8 +18,8 @@ jobs:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
-      # Exemplo: você pode definir em secrets ou capturar numa etapa anterior:
-      # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
+      # Se quiser fixar, pode definir isso em secrets ou em steps antes:
+      # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-MiniProjetoCloud2.0'
 
     steps:
       - name: Checkout do repositório
@@ -166,7 +166,7 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
+      - name: Deploy Web App (sem App Insights)
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -198,18 +198,45 @@ jobs:
               --only-show-errors
             echo "Web App deploy concluído: $DEPLOY_NAME"
 
-      - name: Deploy Function App em Python (sem App Insights)
+      - name: Deploy Function App em Python (com plano existente)
         uses: azure/cli@v1
         with:
-                inlineScript: |
-                  echo "Deploy Function App ($FUNC_NAME) sem App Insights..."
-                  az deployment group create --name "deploy-funcapp-$(date +%s)" \
-                  --resource-group "MiniProjetoCloud2.0" --template-file "templates/function-app.bicep" \
-                  --parameters functionAppName="func-rodrig0salv" \
-                  storageAccountName="miniprojetostorage20" location="francecentral" \
-                  existingPlanResourceId="ASP-MiniProjetoCloud2.0" 
+          inlineScript: |
+            RG="MiniProjetoCloud2.0"
+            FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
+            STORAGE_ACCOUNT_NAME="miniprojetostorage20"
+            LOCATION="francecentral"
+            TEMPLATE="templates/function-app.bicep"
+            PLAN_NAME="ASP-MiniProjetoCloud2.0"
 
-                  echo "Function App deploy concluído: $DEPLOY_NAME"
+            echo "Validando build do Bicep..."
+            az bicep build --file "$TEMPLATE"
+
+            echo "Obtendo resourceId do App Service Plan existente..."
+            PLAN_ID=$(az appservice plan show \
+              --name "$PLAN_NAME" \
+              --resource-group "$RG" \
+              --query id -o tsv)
+            if [ -z "$PLAN_ID" ]; then
+              echo "⚠️ Não foi possível obter resourceId do plano '$PLAN_NAME' no RG '$RG'."
+              exit 1
+            fi
+            echo "Plano existente resourceId: $PLAN_ID"
+
+            DEPLOY_NAME="deploy-funcapp-$(date +%s)"
+            echo "Deploy Function App ($FUNC_NAME) usando plano existente..."
+            az deployment group create \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
+              --template-file "$TEMPLATE" \
+              --parameters \
+                functionAppName="$FUNC_NAME" \
+                storageAccountName="$STORAGE_ACCOUNT_NAME" \
+                location="$LOCATION" \
+                existingPlanResourceId="$PLAN_ID" \
+              --only-show-errors \
+              --verbose
+            echo "Function App deploy concluído: $DEPLOY_NAME"
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1
