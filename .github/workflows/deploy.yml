@@ -215,7 +215,37 @@ jobs:
               --only-show-errors
             echo "Function App deployment concluído: $DEPLOY_NAME"
 
-
+      - name: Publicar código das Functions (zip-deploy)
+        # Usa o Azure CLI container para zip-deploy:
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "Preparando publicação das Azure Functions locais em redditIngestFunc..."
+            # Instala zip se não existir
+            if ! command -v zip &>/dev/null; then
+              echo "Instalando zip..."
+              apt-get update && apt-get install -y zip
+            fi
+            # Compacta o diretório de funções
+            FUNC_DIR="redditIngestFunc"
+            ZIP_NAME="redditIngestFunc.zip"
+            if [ ! -d "$FUNC_DIR" ]; then
+              echo "Diretório $FUNC_DIR não existe. Abortando publicação."
+              exit 1
+            fi
+            echo "Compactando $FUNC_DIR em $ZIP_NAME..."
+            cd "$FUNC_DIR"
+            zip -r "../$ZIP_NAME" ./*
+            cd ..
+            # Executa o zip-deploy
+            echo "Fazendo zip-deploy para Function App '$FUNCTIONAPP_NAME'..."
+            az functionapp deployment source config-zip \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --src "$ZIP_NAME"
+            echo "Publicação concluída."
+            # opcional: remover ZIP local
+            rm -f "$ZIP_NAME"
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1
