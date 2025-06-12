@@ -1,129 +1,137 @@
-@description('Nome do Web App a criar.')
+@description('Nome do Web App (Linux Container).')
 param webAppName string
 
-@description('Nome do App Service Plan existente (deve já existir ou ter sido criado noutro template).')
+@description('App Service Plan (resourceId ou apenas nome em mesmos RG e subscription). Aqui usamos o nome e assumimos que o plano já existe ou será criado separadamente.')
 param planName string
 
-@description('Nome completo da imagem Docker, ex: "meu-registo/minha-app:latest".')
+@description('Imagem de container (ex: "rodrig0salv/minha-app:latest").')
 param imageName string
 
-@description('Se a imagem Docker estiver em registry privado, a URL do registry (ex: "myregistry.azurecr.io"). Se for imagem pública (Docker Hub), deixe vazio.')
+@description('URL do registro de container, se for necessário (ex: myregistry.azurecr.io). Se não usar ACR ou login público, deixe vazio.')
 param containerRegistryUrl string = ''
 
 @secure()
-@description('Username para o container registry privado. Se não usar registry privado, deixe vazio.')
+@description('Usuário do registro de container, se necessário. Se não usar ACR ou login público, deixe vazio.')
 param containerRegistryUsername string = ''
 
 @secure()
-@description('Password ou secret para o container registry privado. Se não usar registry privado, deixe vazio.')
+@description('Senha ou senha de acesso ao registro de container, se necessário. Se não usar ACR ou login público, deixe vazio.')
 param containerRegistryPassword string = ''
 
-@description('Nome da Storage Account para a qual o Web App precisará de acesso. Se não usar Storage, deixe vazio.')
+@description('Nome da Storage Account existente, para gerar SAS ou atribuir roles, se sua aplicação usar. Se não usar, deixe vazio.')
 param storageAccountName string = ''
 
-@description('Nome do container Blob dentro da Storage Account. Se não usar Storage, deixe vazio.')
+@description('Nome do container dentro da Storage Account (para SAS ou configuração de app setting). Se não usar, deixe vazio.')
 param containerName string = ''
 
-@secure()
-@description('SAS token (sem “?”) para aceder ao container Blob. Se não usar Storage ou usar outra forma, deixe vazio.')
+@description('SAS token para acesso ao Storage (string sem o “?” no início). Se você já gerou externamente, passe aqui; caso contrário, deixe vazio e trate no pipeline se desejar.')
 param containerSasToken string = ''
 
-@description('Se true, o template tentará criar um Role Assignment para dar ao Web App acesso à Storage Account. Se não usar Storage ou não quiser atribuir via template, passe false.')
-param createStorageRoleAssignment bool = false
+@description('Se true, cria um Application Insights neste RG. Se false, espera que você passe appInsightsResourceId para ligar a um Insights existente. Se false e appInsightsResourceId vazio, não adiciona configurações de Insights.')
+param createAppInsights bool = false
 
-@description('Localização; por defeito, usa a localização do resource group.')
+@description('Nome para o novo Application Insights, se createAppInsights=true.')
+param appInsightsName string = '${webAppName}-ai'
+
+@description('Resource ID de um Application Insights já existente, se quiser ligar o Web App a um Insights existente. Se não quiser usar Insights, deixe vazio.')
+param appInsightsResourceId string = ''
+
+@description('Localização para criar o Application Insights, se createAppInsights=true. Por padrão, usa resourceGroup().location.')
 param location string = resourceGroup().location
 
-// ===== Referência ao App Service Plan existente =====
-resource asp 'Microsoft.Web/serverfarms@2022-03-01' existing = {
-  name: planName
+@description('Indica se o Web App deve ter identidade atribuída (Managed Identity). Se true, cria SystemAssigned identity e habilita para uso em atribuições de role.')
+param enableSystemIdentity bool = true
+
+// =======================
+// Recursos opcionais
+// =======================
+
+// Se createAppInsights=true e não foi passado appInsightsResourceId, criamos novo Insights
+resource appInsightsNew 'microsoft.insights/components@2020-02-02' = if (createAppInsights && empty(appInsightsResourceId)) {
+  name: appInsightsName
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+  }
 }
 
-// ===== Variáveis para App Settings =====
-// Para registry privado, definimos três settings padrão usados pelo Web App para registos privados:
-var registrySettings = empty(containerRegistryUrl) ? [] : [
-  {
-    name: 'DOCKER_REGISTRY_SERVER_URL'
-    value: containerRegistryUrl
-  }
-  {
-    name: 'DOCKER_REGISTRY_SERVER_USERNAME'
-    value: containerRegistryUsername
-  }
-  {
-    name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
-    value: containerRegistryPassword
-  }
-]
+// Determina o resourceId do Insights a usar
+var aiResourceIdUsed = !empty(appInsightsResourceId)
+  ? appInsightsResourceId
+  : (createAppInsights ? appInsightsNew.id : '')
 
-// Para Storage via SAS, definimos settings (exemplo):
-var storageSettings = empty(storageAccountName) ? [] : [
-  {
-    name: 'STORAGE_ACCOUNT_NAME'
-    value: storageAccountName
-  }
-  {
-    name: 'CONTAINER_NAME'
-    value: containerName
-  }
-  {
-    name: 'SAS_TOKEN'
-    value: containerSasToken
-  }
-]
+// Obtém instrumentation key se existir AI
+var instrumentationKeyVar = empty(aiResourceIdUsed)
+  ? ''
+  : reference(aiResourceIdUsed, '2020-02-02').InstrumentationKey
 
-// Concatena ambas listas; se uma delas for vazia, concat apenas devolve a outra.
-var appSettingsList = concat(registrySettings, storageSettings)
-
-// ===== Criação do Web App =====
+// =======================
+// Recurso Web App
+// =======================
 resource webApp 'Microsoft.Web/sites@2022-03-01' = {
   name: webAppName
   location: location
-  kind: 'app,linux'
-  identity: {
+  kind: 'app,linux,container'
+  identity: enableSystemIdentity ? {
     type: 'SystemAssigned'
-  }
+  } : null
   properties: {
-    serverFarmId: asp.id
+    serverFarmId: resourceId('Microsoft.Web/serverfarms', planName)
     siteConfig: {
-      // Define a imagem Docker
-      linuxFxVersion: 'DOCKER|${imageName}'
-      // Aplica App Settings apenas se algum existir (lista vazia é permitida)
-      appSettings: appSettingsList
+      // Configurações básicas de container
+      linuxFxVersion: 'DOCKER|' + imageName
+      // Se registro privado, define credenciais:
+      imageRegistryCredentials: empty(containerRegistryUrl) ? [] : [
+        {
+          serverUrl: containerRegistryUrl
+          username: containerRegistryUsername
+          password: containerRegistryPassword
+        }
+      ]
+      // App Settings:
+      appSettings: [
+        {
+          name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
+          value: 'false'
+        }
+        // Configurar Storage SAS se fornecido
+        {
+          name: 'STORAGE_ACCOUNT_NAME'
+          value: empty(storageAccountName) ? '' : storageAccountName
+        }
+        {
+          name: 'STORAGE_CONTAINER_NAME'
+          value: empty(containerName) ? '' : containerName
+        }
+        {
+          name: 'STORAGE_SAS_TOKEN'
+          value: empty(containerSasToken) ? '' : containerSasToken
+        }
+        // Application Insights
+        {
+          name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
+          value: instrumentationKeyVar
+        }
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          // A connection string pode ser "InstrumentationKey=xxxx"; se não existir, vazio
+          value: empty(instrumentationKeyVar) ? '' : 'InstrumentationKey=' + instrumentationKeyVar
+        }
+      ]
     }
   }
-}
-
-// ===== Role Assignment para Storage Account (opcional) =====
-/*
-   Se createStorageRoleAssignment == true E storageAccountName não vazio,
-   faz referência à Storage Account existente e atribui role "Storage Blob Data Contributor"
-   ao principal do Web App.
-*/
-resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' existing = if (createStorageRoleAssignment && !empty(storageAccountName)) {
-  name: storageAccountName
-}
-
-var storageAccountId = createStorageRoleAssignment && !empty(storageAccountName) ? storageAccount.id : ''
-// RoleDefinitionId do Storage Blob Data Contributor
-var storageBlobContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-// Nome determinístico para o Role Assignment
-var roleAssignmentName = createStorageRoleAssignment && !empty(storageAccountName) ? guid(webApp.id, storageAccountId, 'StorageBlobDataContributor') : '00000000-0000-0000-0000-000000000000'
-
-resource storageBlobRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = if (createStorageRoleAssignment && !empty(storageAccountName)) {
-  name: roleAssignmentName
-  scope: storageAccount
-  properties: {
-    roleDefinitionId: storageBlobContributorRoleId
-    principalId: webApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
   dependsOn: [
-    webApp
+    // Se criamos novo Insights, garantimos que existirá antes do Web App
+    appInsightsNew
   ]
 }
 
-// ===== Outputs opcionais =====
-output webAppHostname string = webApp.properties.defaultHostName
-output webAppId string = webApp.id
-output principalId string = webApp.identity.principalId
+// =======================
+// Outputs
+// =======================
+output webAppResourceId string = webApp.id
+output webAppDefaultHostname string = webApp.properties.defaultHostName
+output webAppPrincipalId string = webApp.identity.principalId
+output appInsightsUsed string = aiResourceIdUsed
+output instrumentationKey string = instrumentationKeyVar

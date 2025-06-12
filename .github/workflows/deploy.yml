@@ -16,11 +16,8 @@ jobs:
     env:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
-      # Nome do Application Insights (para Web App)
       APPINSIGHTS_WEB_NAME: 'minhaapp-rodrig0salv-ai'
-      # Nome do Function App
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
-      # Application Insights para Function (se criar separado)
       APPINSIGHTS_FUNC_NAME: 'func-rodrig0salv-ai'
 
     steps:
@@ -47,19 +44,25 @@ jobs:
           TARGET_LOCATION="francecentral"
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
+            echo "Criando RG '$RG' em $TARGET_LOCATION..."
             az group create --name "$RG" --location "$TARGET_LOCATION"
           else
             CURRENT_LOCATION=$(echo "$EXISTE_RG_JSON" | jq -r '.location')
             if [ "$CURRENT_LOCATION" != "$TARGET_LOCATION" ]; then
+              echo "RG '$RG' existe em $CURRENT_LOCATION e será recriado em $TARGET_LOCATION..."
               az group delete --name "$RG" --yes --no-wait
-              echo "A aguardar remoção do RG..."
+              echo "Aguardando remoção do RG..."
               for i in {1..60}; do
-                if ! az group show --name "$RG" &>/dev/null; then break; fi
+                if ! az group show --name "$RG" &>/dev/null; then
+                  echo "RG removido."
+                  break
+                fi
                 sleep 5
               done
+              echo "Criando RG '$RG' em $TARGET_LOCATION..."
               az group create --name "$RG" --location "$TARGET_LOCATION"
             else
-              echo "RG já existe em $TARGET_LOCATION."
+              echo "RG '$RG' já existe em $TARGET_LOCATION. Continuando."
             fi
           fi
 
@@ -78,19 +81,25 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
+            RG="MiniProjetoCloud2.0"
+            DEPLOY_NAME="deploy-storage-$(date +%s)"
             az deployment group create \
-              --resource-group MiniProjetoCloud2.0 \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
               --template-file templates/storage-account.bicep \
               --parameters \
                 storageAccountName='miniprojetostorage20' \
                 containerName='reddit-posts' \
                 enableBlobVersioning=true \
-                blobSoftDeleteDays=7
+                blobSoftDeleteDays=7 \
+                --only-show-errors
+            echo "Storage Account + Container deploy: $DEPLOY_NAME"
 
       - name: Deploy CosmosDB (fallback se necessário/quota)
         uses: azure/cli@v1
         with:
           inlineScript: |
+            RG="MiniProjetoCloud2.0"
             if [ -z "${COSMOS_ACCOUNT_NAME}" ]; then
               echo "Pular Cosmos DB."
               exit 0
@@ -99,25 +108,31 @@ jobs:
             COSMOS_FALLBACK_LOCATIONS='westeurope northeurope eastus uksouth'
             LOCATIONS_TO_TRY=("$COSMOS_PRIMARY_LOCATION")
             for loc in $COSMOS_FALLBACK_LOCATIONS; do LOCATIONS_TO_TRY+=("$loc"); done
-            RG="MiniProjetoCloud2.0"
             ACCOUNT_NAME="${COSMOS_ACCOUNT_NAME}"
             SUCCESS=false
             for region in "${LOCATIONS_TO_TRY[@]}"; do
-              echo "Tentando Cosmos DB em $region..."
-              EXISTE=$(az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" -o json 2>/dev/null || echo "")
-              if [ -n "$EXISTE" ]; then
-                STATE=$(echo "$EXISTE" | jq -r '.properties.provisioningState // ""')
+              echo "Tentando Cosmos DB '$ACCOUNT_NAME' em $region..."
+              EXISTE_JSON=$(az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" -o json 2>/dev/null || echo "")
+              if [ -n "$EXISTE_JSON" ]; then
+                STATE=$(echo "$EXISTE_JSON" | jq -r '.properties.provisioningState // ""')
                 if [ "$STATE" != "Succeeded" ]; then
+                  echo "Estado existente: $STATE. Excluindo para recriar..."
                   az cosmosdb delete --name "$ACCOUNT_NAME" --resource-group "$RG" --yes
                   for i in {1..30}; do
+                    if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
+                      echo "Instância anterior removida."
+                      break
+                    fi
                     sleep 5
-                    if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then break; fi
                   done
                 else
-                  echo "Cosmos existente em Succeeded em $region; atualizar."
+                  echo "Cosmos existente em Succeeded; atualizando nesta região ($region) se necessário."
                 fi
               fi
+
+              DEPLOY_NAME="deploy-cosmos-${region}-$(date +%s)"
               if az deployment group create \
+                  --name "$DEPLOY_NAME" \
                   --resource-group "$RG" \
                   --template-file templates/cosmosdb.bicep \
                   --parameters \
@@ -128,15 +143,16 @@ jobs:
                     cosmosPartitionKeyPath='/id' \
                     cosmosThroughput=${COSMOS_THROUGHPUT} \
                   --only-show-errors; then
-                echo "Cosmos OK em $region"
+                echo "✅ Cosmos DB OK em $region (deployment $DEPLOY_NAME)"
                 SUCCESS=true
                 break
               else
-                echo "Falhou em $region. Tentando próxima..."
+                echo "❌ Falhou deploy Cosmos em $region. Tentando próxima..."
               fi
             done
+
             if [ "$SUCCESS" != "true" ]; then
-              echo "Falha em todas regiões: ${LOCATIONS_TO_TRY[*]}"
+              echo "❌ Falha em criar Cosmos DB em todas regiões: ${LOCATIONS_TO_TRY[*]}"
               exit 1
             fi
 
@@ -144,15 +160,20 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
+            RG="MiniProjetoCloud2.0"
+            DEPLOY_NAME="deploy-asp-web-$(date +%s)"
             az deployment group create \
-              --resource-group MiniProjetoCloud2.0 \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
               --template-file templates/app-service-plan.bicep \
               --parameters \
                 planName='ASP-MiniProjetoCloud2.0' \
                 skuTier='Basic' \
                 skuName='B2' \
                 capacity=1 \
-                isLinux=true
+                isLinux=true \
+              --only-show-errors
+            echo "App Service Plan deploy: $DEPLOY_NAME"
 
       - name: Gerar SAS token Storage (opcional)
         id: gen_sas
@@ -173,55 +194,110 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      - name: Deploy Web App
+      - name: Deploy Web App com App Insights opcional
         uses: azure/cli@v1
         with:
           inlineScript: |
-            TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
-            [ -z "$TOKEN" ] && TOKEN=""
-            az deployment group create \
-              --resource-group MiniProjetoCloud2.0 \
-              --template-file templates/web-app.bicep \
-              --parameters \
-                webAppName='minhaapp-rodrig0salv' \
-                planName='ASP-MiniProjetoCloud2.0' \
-                imageName='rodrig0salv/minha-app:latest' \
-                storageAccountName='miniprojetostorage20' \
-                containerName='reddit-posts' \
-                containerSasToken="$TOKEN" \
-                createAppInsights=true \
-                appInsightsName='${{ env.APPINSIGHTS_WEB_NAME }}'
+            RG="MiniProjetoCloud2.0"
+            DEPLOY_NAME="deploy-webapp-$(date +%s)"
+            # PARAMS:
+            WEBAPP_NAME="minhaapp-rodrig0salv"
+            PLAN_NAME="ASP-MiniProjetoCloud2.0"
+            IMAGE_NAME="rodrig0salv/minha-app:latest"
+            STORAGE_ACCOUNT_NAME="miniprojetostorage20"
+            CONTAINER_NAME="reddit-posts"
+            SAS_TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
+            [ -z "$SAS_TOKEN" ] && SAS_TOKEN=""
 
-      - name: Deploy Application Insights para Function (caso precise criar)
+            # Criar ou ligar App Insights para Web App
+            CREATE_AI_WEB=true
+            AI_WEB_NAME="${{ env.APPINSIGHTS_WEB_NAME }}"
+            # Se quiser ligar um existente, defina APPINSIGHTS_WEB_ID como resourceId; caso contrário deixe vazio:
+            APPINSIGHTS_WEB_ID=""
+
+            # Se for ligar existente, use: CREATE_AI_WEB=false e preencha APPINSIGHTS_WEB_ID
+            echo "Deploy Web App ($WEBAPP_NAME) com createAppInsights=$CREATE_AI_WEB..."
+
+            # Chamamos o template web-app.bicep, que deve declarar:
+            # param webAppName string
+            # param planName string
+            # param imageName string
+            # param containerRegistryUrl string = ''
+            # param containerRegistryUsername string = ''
+            # param containerRegistryPassword string = ''
+            # param storageAccountName string = ''
+            # param containerName string = ''
+            # param containerSasToken string = ''
+            # param createAppInsights bool
+            # param appInsightsName string
+            # param appInsightsResourceId string
+            DEPLOY_CMD="az deployment group create --name $DEPLOY_NAME --resource-group $RG --template-file templates/web-app.bicep --parameters webAppName=$WEBAPP_NAME planName=$PLAN_NAME imageName=$IMAGE_NAME containerRegistryUrl='' containerRegistryUsername='' containerRegistryPassword='' storageAccountName=$STORAGE_ACCOUNT_NAME containerName=$CONTAINER_NAME containerSasToken='$SAS_TOKEN' createAppInsights=$CREATE_AI_WEB appInsightsName=$AI_WEB_NAME appInsightsResourceId='$APPINSIGHTS_WEB_ID'"
+            echo "$DEPLOY_CMD"
+            eval $DEPLOY_CMD
+            echo "Web App deploy: $DEPLOY_NAME"
+
+      - name: Deploy Application Insights (Function) se precisar criar
         uses: azure/cli@v1
         with:
           inlineScript: |
-            # Se você quiser usar Insights existente, ajuste aqui. Por simplicidade, criamos novo se createAppInsights for true.
+            RG="MiniProjetoCloud2.0"
+            # Se preferir ligar existente, ajuste APPINSIGHTS_FUNC_ID abaixo.
+            APPINSIGHTS_FUNC_NAME="${{ env.APPINSIGHTS_FUNC_NAME }}"
+            DEPLOY_NAME="deploy-ai-func-$(date +%s)"
+            echo "Deploy App Insights para Function: $APPINSIGHTS_FUNC_NAME"
+            # template app-insights.bicep deve declarar:
+            # param appInsightsName string
+            # output appInsightsResourceId string = component.id
             az deployment group create \
-              --resource-group MiniProjetoCloud2.0 \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
               --template-file templates/app-insights.bicep \
-              --parameters \
-                appInsightsName='${{ env.APPINSIGHTS_FUNC_NAME }}'
+              --parameters appInsightsName="$APPINSIGHTS_FUNC_NAME" \
+              --only-show-errors
+            echo "App Insights Function deploy: $DEPLOY_NAME"
+
+      - name: Obter App Insights ID para Function
+        id: get_ai_func
+        run: |
+          RG="MiniProjetoCloud2.0"
+          # Se criou via deployment acima, o recurso existe como name APPINSIGHTS_FUNC_NAME
+          AI_ID=$(az resource show \
+            --resource-group "$RG" \
+            --name "${{ env.APPINSIGHTS_FUNC_NAME }}" \
+            --resource-type "microsoft.insights/components" \
+            --query id -o tsv 2>/dev/null || echo "")
+          if [ -z "$AI_ID" ]; then
+            echo "Não encontrou Application Insights '${{ env.APPINSIGHTS_FUNC_NAME }}'."
+          else
+            echo "AI_ID=$AI_ID" >> $GITHUB_OUTPUT
+          fi
 
       - name: Deploy Function App em Python
         uses: azure/cli@v1
         with:
           inlineScript: |
-            # Obter Instrumentation Key ou resourceId do Insights criado
-            AI_FUNC_ID=$(az deployment group show \
-              --resource-group MiniProjetoCloud2.0 \
-              --name $(az deployment group list --resource-group MiniProjetoCloud2.0 --query "[?contains(properties.templateLink.uri,'app-insights.bicep')].name" -o tsv) \
-              --query properties.outputs.appInsightsResourceId.value -o tsv || echo "")
-            # Se falhar em obter, pode montar manual ou usar variável de env
+            RG="MiniProjetoCloud2.0"
+            DEPLOY_NAME="deploy-funcapp-$(date +%s)"
+            FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
+            STORAGE_ACCOUNT_NAME="miniprojetostorage20"
+            # Pega AI ID do passo anterior
+            APPINSIGHTS_FUNC_ID="${{ steps.get_ai_func.outputs.AI_ID }}"
+            CREATE_AI_FUNC=false
+            # Se preferir criar dentro do template function-app.bicep, ajuste CREATE_AI_FUNC=true e passe appInsightsName
+            echo "Deploy Function App ($FUNC_NAME) com AppInsights ID: $APPINSIGHTS_FUNC_ID"
+            # template function-app.bicep deve declarar:
+            # param functionAppName string
+            # param storageAccountName string
+            # param createAppInsights bool
+            # param appInsightsName string
+            # param appInsightsResourceId string
             az deployment group create \
-              --resource-group MiniProjetoCloud2.0 \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
               --template-file templates/function-app.bicep \
-              --parameters \
-                functionAppName='${{ env.FUNCTIONAPP_NAME }}' \
-                storageAccountName='miniprojetostorage20' \
-                appInsightsResourceId="$AI_FUNC_ID" \
-                createAppInsights=false
-            # Observação: se preferir criar Insights dentro do template de Function, passe createAppInsights=true e ajuste nome via parâmetro.
+              --parameters functionAppName="$FUNC_NAME" storageAccountName="$STORAGE_ACCOUNT_NAME" createAppInsights=$CREATE_AI_FUNC appInsightsName='${{ env.APPINSIGHTS_FUNC_NAME }}' appInsightsResourceId="$APPINSIGHTS_FUNC_ID" \
+              --only-show-errors
+            echo "Function App deploy: $DEPLOY_NAME"
 
       - name: Atribuir role ao Web App sobre Storage (opcional)
         uses: azure/cli@v1
@@ -235,7 +311,7 @@ jobs:
               STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
               az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
             else
-              echo "Web App não tem identidade configurada ou não existe ainda."
+              echo "Web App não tem identidade configurada ou não existe."
             fi
 
       - name: Atribuir role ao Function App sobre Storage (opcional)
@@ -250,7 +326,7 @@ jobs:
               STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
               az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
             else
-              echo "Function App não tem identidade configurada ou não existe ainda."
+              echo "Function App não tem identidade configurada ou não existe."
             fi
 
       - name: Mostrar outputs finais Web + Function
@@ -259,10 +335,18 @@ jobs:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
             # Web App outputs
-            DEPLOY_WEB=$(az deployment group list --resource-group $RG --query "[?contains(properties.templateLink.uri,'web-app.bicep')].name" -o tsv)
-            echo "Deployment Web App: $DEPLOY_WEB"
-            az deployment group show --resource-group $RG --name "$DEPLOY_WEB" --query properties.outputs
+            DEPLOY_WEB_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-webapp-')]|[0].name" -o tsv)
+            if [ -n "$DEPLOY_WEB_NAME" ]; then
+              echo "Deployment Web App: $DEPLOY_WEB_NAME"
+              az deployment group show --resource-group "$RG" --name "$DEPLOY_WEB_NAME" --query properties.outputs
+            else
+              echo "Não encontrou deployment Web App."
+            fi
             # Function App outputs
-            DEPLOY_FUNC=$(az deployment group list --resource-group $RG --query "[?contains(properties.templateLink.uri,'function-app.bicep')].name" -o tsv)
-            echo "Deployment Function App: $DEPLOY_FUNC"
-            az deployment group show --resource-group $RG --name "$DEPLOY_FUNC" --query properties.outputs
+            DEPLOY_FUNC_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-funcapp-')]|[0].name" -o tsv)
+            if [ -n "$DEPLOY_FUNC_NAME" ]; then
+              echo "Deployment Function App: $DEPLOY_FUNC_NAME"
+              az deployment group show --resource-group "$RG" --name "$DEPLOY_FUNC_NAME" --query properties.outputs
+            else
+              echo "Não encontrou deployment Function App."
+            fi
