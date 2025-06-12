@@ -124,7 +124,7 @@ jobs:
                     sleep 5
                   done
                 else
-                  echo "Cosmos existente em Succeeded; atualizando nesta região ($region) se necessário."
+                  echo "Cosmos existente em Succeeded; atualizando nesta região ($region) se aplicável."
                 fi
               fi
 
@@ -193,7 +193,7 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      - name: Deploy Web App (sem App Insights)
+      - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -222,7 +222,8 @@ jobs:
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
                 containerName="$CONTAINER_NAME" \
                 containerSasToken="$SAS_TOKEN" \
-                enableManagedIdentity=true \
+                createAppInsights=false \
+                appInsightsName='' \
               --only-show-errors
             echo "Web App deploy: $DEPLOY_NAME"
 
@@ -242,7 +243,6 @@ jobs:
               --parameters \
                 functionAppName="$FUNC_NAME" \
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
-                enableManagedIdentity=true \
               --only-show-errors
             echo "Function App deploy: $DEPLOY_NAME"
 

@@ -39,7 +39,7 @@ param appInsightsInstrumentationKey string = ''
 // Local do resource group
 var location = resourceGroup().location
 
-// 1) Se precisa criar AI, declaramos o recurso:
+// 1) Se precisa criar AI, declaramos o recurso com condicional
 resource ai 'microsoft.insights/components@2020-02-02' = if (createAppInsights) {
   name: appInsightsName
   location: location
@@ -50,8 +50,8 @@ resource ai 'microsoft.insights/components@2020-02-02' = if (createAppInsights) 
 }
 
 // 2) Determina o instrumentation key efetivo:
-//    - Se criamos AI, usamos ai.properties.InstrumentationKey (symbolic reference, seguro em compile time).
-//    - Senão, usamos o parâmetro appInsightsInstrumentationKey. Se este estiver vazio, interpretamos como sem AI e resultamos em ''.
+//    - Se criamos AI, usamos ai.properties.InstrumentationKey.
+//    - Senão, se o parâmetro for vazio, resulta em string vazia, caso contrário, usa o parâmetro.
 var effectiveInstrumentationKey = createAppInsights 
   ? ai.properties.InstrumentationKey 
   : (empty(appInsightsInstrumentationKey) ? '' : appInsightsInstrumentationKey)
@@ -113,17 +113,19 @@ var storageSettings = concat(
 )
 
 // 3.4 Settings de Application Insights, somente se tivermos effectiveInstrumentationKey não vazio:
-var aiSettings = empty(effectiveInstrumentationKey) ? [] : [
-  {
-    name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
-    value: effectiveInstrumentationKey
-  }
-  {
-    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-    // Usar string interpolation, evitando '+':
-    value: 'InstrumentationKey=${effectiveInstrumentationKey}'
-  }
-]
+var aiSettings = empty(effectiveInstrumentationKey) 
+  ? [] 
+  : [
+      {
+        name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
+        value: effectiveInstrumentationKey
+      },
+      {
+        name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+        // Usa string interpolation: 'InstrumentationKey=<valor>'
+        value: 'InstrumentationKey=${effectiveInstrumentationKey}'
+      }
+    ]
 
 // 3.5 Concatena todas as partes:
 var allAppSettings = concat(baseSettings, registrySettings, storageSettings, aiSettings)
@@ -140,7 +142,7 @@ resource webApp 'Microsoft.Web/sites@2021-02-01' = {
   properties: {
     serverFarmId: resourceId('Microsoft.Web/serverfarms', planName)
     siteConfig: {
-      // String interpolation para Linux container:
+      // String interpolation para Linux container: "DOCKER|<imageName>"
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
       appSettings: allAppSettings
@@ -148,7 +150,9 @@ resource webApp 'Microsoft.Web/sites@2021-02-01' = {
     }
   }
   // Dependência condicional em AI: se criamos AI, espera antes de criar WebApp
-  dependsOn: createAppInsights ? [ai] : []
+  dependsOn: createAppInsights ? [
+    ai
+  ] : []
 }
 
 // Outputs úteis:
