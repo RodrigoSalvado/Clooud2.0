@@ -202,23 +202,12 @@ jobs:
         uses: azure/cli@v1
         with:
                 inlineScript: |
-                  RG="MiniProjetoCloud2.0"
-                  DEPLOY_NAME="deploy-funcapp-$(date +%s)"
-                  FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
-                  STORAGE_ACCOUNT_NAME="miniprojetostorage20"
-                  LOCATION="francecentral"
-
                   echo "Deploy Function App ($FUNC_NAME) sem App Insights..."
-                  az deployment group create \
-                    --name "$DEPLOY_NAME" \
-                    --resource-group "$RG" \
-                    --template-file templates/function-app.bicep \
-                    --parameters \
-                      functionAppName="$FUNC_NAME" \
-                      storageAccountName="$STORAGE_ACCOUNT_NAME" \
-                      location="$LOCATION" \
-                      existingPlanResourceId='' \
-                    --only-show-errors
+                  az deployment group create --name "deploy-funcapp-$(date +%s)" \
+                  --resource-group "MiniProjetoCloud2.0" --template-file "templates/function-app.bicep" \
+                  --parameters functionAppName="func-rodrig0salv" \
+                  storageAccountName="miniprojetostorage20" location="francecentral" \
+                  existingPlanResourceId="ASP-MiniProjetoCloud2.0" 
 
                   echo "Function App deploy concluído: $DEPLOY_NAME"
 
