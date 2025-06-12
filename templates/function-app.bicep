@@ -59,7 +59,7 @@ resource functionApp 'Microsoft.Web/sites@2022-03-01' = {
     siteConfig: {
       // Exemplo de runtime Python 3.11; ajuste se precisar outra versão suportada
       linuxFxVersion: 'PYTHON|3.11'
-      always_on: true
+      alwaysOn: true
       appSettings: [
         {
           name: 'FUNCTIONS_WORKER_RUNTIME'

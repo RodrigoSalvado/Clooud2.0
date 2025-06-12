@@ -20,7 +20,8 @@ jobs:
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
       RG: 'MiniProjetoCloud2.0'
       TARGET_LOCATION: 'francecentral'
-      # Se você usar um plano existente, pode definir:
+      WEBAPP_NAME: 'minhaapp-rodrig0salv'
+      # Se usar plano existente, defina em secrets ou variável:
       # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
 
     steps:
@@ -34,7 +35,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Instalar jq
+      - name: Instalar jq (no runner)
         run: |
           if ! command -v jq &>/dev/null; then
             sudo apt-get update
@@ -169,14 +170,6 @@ jobs:
         with:
           inlineScript: |
             DEPLOY_NAME="deploy-webapp-$(date +%s)"
-            WEBAPP_NAME="minhaapp-rodrig0salv"
-            PLAN_NAME="ASP-MiniProjetoCloud2.0"
-            IMAGE_NAME="rodrig0salv/minha-app:latest"
-            STORAGE_ACCOUNT_NAME="miniprojetostorage20"
-            CONTAINER_NAME="reddit-posts"
-            SAS_TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
-            [ -z "$SAS_TOKEN" ] && SAS_TOKEN=""
-
             echo "Deploy Web App ($WEBAPP_NAME) sem App Insights..."
             az deployment group create \
               --name "$DEPLOY_NAME" \
@@ -184,14 +177,14 @@ jobs:
               --template-file templates/web-app.bicep \
               --parameters \
                 webAppName="$WEBAPP_NAME" \
-                planName="$PLAN_NAME" \
-                imageName="$IMAGE_NAME" \
+                planName="ASP-MiniProjetoCloud2.0" \
+                imageName="rodrig0salv/minha-app:latest" \
                 containerRegistryUrl='' \
                 containerRegistryUsername='' \
                 containerRegistryPassword='' \
-                storageAccountName="$STORAGE_ACCOUNT_NAME" \
-                containerName="$CONTAINER_NAME" \
-                containerSasToken="$SAS_TOKEN" \
+                storageAccountName="miniprojetostorage20" \
+                containerName="reddit-posts" \
+                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
               --only-show-errors
             echo "Web App deploy concluído: $DEPLOY_NAME"
 
@@ -212,6 +205,13 @@ jobs:
                 existingPlanResourceId="/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$RG/providers/Microsoft.Web/serverfarms/ASP-MiniProjetoCloud2.0" \
               --only-show-errors
             echo "Function App deployment concluído: $DEPLOY_NAME"
+
+      - name: Instalar zip no runner (para compactar funções)
+        run: |
+          if ! command -v zip &>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zip
+          fi
 
       - name: Compactar Azure Functions localmente
         run: |
@@ -241,6 +241,21 @@ jobs:
               --name "$FUNCTIONAPP_NAME" \
               --src "$ZIP_NAME"
             echo "Publicação concluída."
+
+      - name: Reiniciar Web App e Function App após deploy
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "Reiniciando Web App '$WEBAPP_NAME'..."
+            az webapp restart \
+              --resource-group "$RG" \
+              --name "$WEBAPP_NAME"
+            echo "Web App reiniciado."
+            echo "Reiniciando Function App '$FUNCTIONAPP_NAME'..."
+            az functionapp restart \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME"
+            echo "Function App reiniciado."
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1
