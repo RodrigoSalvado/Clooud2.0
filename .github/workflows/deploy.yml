@@ -21,6 +21,7 @@ jobs:
       RG: 'MiniProjetoCloud2.0'
       TARGET_LOCATION: 'francecentral'
       WEBAPP_NAME: 'minhaapp-rodrig0salv'
+      AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
       # Se usar plano existente, defina em secrets ou variável:
       # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
 
@@ -215,16 +216,31 @@ jobs:
           fi
           npm install -g azure-functions-core-tools@4 --unsafe-perm true
 
+      - name: Validar existência do diretório de Functions
+        run: |
+          if [ ! -d "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}" ]; then
+            echo "Diretório ${AZURE_FUNCTIONAPP_PACKAGE_PATH} não existe. Abortando publicação de Functions."
+            exit 1
+          fi
+
+      - name: Instalar dependências Python da Function App localmente
+        run: |
+          python3 -m venv .venv_func
+          source .venv_func/bin/activate
+          pip install --upgrade pip
+          pip install -r "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/requirements.txt"
+
       - name: Publicar Azure Function App com Remote Build
         env:
           RG: ${{ env.RG }}
           FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
-          AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc"
+          AZURE_FUNCTIONAPP_PACKAGE_PATH: "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}"
         run: |
-          # Atenção: este step roda no runner Ubuntu após login via azure/login
+          # Roda no runner Ubuntu após azure/login
           cd "$AZURE_FUNCTIONAPP_PACKAGE_PATH"
           echo "Publicando Function App '$FUNCTIONAPP_NAME' em RG '$RG'..."
-          func azure functionapp publish "$FUNCTIONAPP_NAME" --python
+          # --python faz remote build, instalar dependências e deploy
+          func azure functionapp publish "$FUNCTIONAPP_NAME" --python --no-build --force
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
