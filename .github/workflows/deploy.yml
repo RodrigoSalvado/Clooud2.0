@@ -206,60 +206,50 @@ jobs:
             DEPLOY_NAME="deploy-funcapp-$(date +%s)"
             FUNC_NAME="$FUNCTIONAPP_NAME"
             STORAGE_ACCOUNT_NAME="miniprojetostorage20"
-            # Exemplo de como obter ou definir o Resource ID do App Service Plan:
-            # Caso já esteja em env, ok; senão, capture antes e exporte em $GITHUB_ENV.
-            PLAN_ID="${FUNCTION_PLAN_RESOURCE_ID:-}"
-            if [ -z "$PLAN_ID" ]; then
-              echo "Resource ID do App Service Plan não fornecido. Ajuste FUNCTION_PLAN_RESOURCE_ID."
-              exit 1
-            fi
 
             echo "Deploy Function App ($FUNC_NAME) sem App Insights..."
-            # Aqui: terminamos corretamente o comando az deployment e não deixamos o 'echo' colado,
-            # e adicionamos --only-show-errors para não poluir saída.
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/function-app.bicep \
               --parameters \
                 functionAppName="$FUNC_NAME" \
-                serverFarmId="$PLAN_ID" \
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
               --only-show-errors
 
-            # Agora o echo é um comando separado
             echo "Function App deploy concluído: $DEPLOY_NAME"
 
 
-      - name: Atribuir role ao Web App sobre Storage (opcional)
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            RG="MiniProjetoCloud2.0"
-            WEBAPP_NAME="minhaapp-rodrig0salv"
-            STORAGE_NAME="miniprojetostorage20"
-            PRINCIPAL_ID=$(az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" --query identity.principalId -o tsv)
-            if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
-              STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
-              az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
-            else
-              echo "Web App não tem identidade configurada ou não existe."
-            fi
 
-      - name: Atribuir role ao Function App sobre Storage (opcional)
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            RG="MiniProjetoCloud2.0"
-            FUNC_NAME="$FUNCTIONAPP_NAME"
-            STORAGE_NAME="miniprojetostorage20"
-            PRINCIPAL_ID=$(az functionapp show --resource-group "$RG" --name "$FUNC_NAME" --query identity.principalId -o tsv)
-            if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
-              STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
-              az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
-            else
-              echo "Function App não tem identidade configurada ou não existe."
-            fi
+            - name: Atribuir role ao Web App sobre Storage (opcional)
+              uses: azure/cli@v1
+              with:
+                inlineScript: |
+                  RG="MiniProjetoCloud2.0"
+                  WEBAPP_NAME="minhaapp-rodrig0salv"
+                  STORAGE_NAME="miniprojetostorage20"
+                  PRINCIPAL_ID=$(az webapp show --resource-group "$RG" --name "$WEBAPP_NAME" --query identity.principalId -o tsv)
+                  if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
+                    STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+                    az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
+                  else
+                    echo "Web App não tem identidade configurada ou não existe."
+                  fi
+
+            - name: Atribuir role ao Function App sobre Storage (opcional)
+              uses: azure/cli@v1
+              with:
+                inlineScript: |
+                  RG="MiniProjetoCloud2.0"
+                  FUNC_NAME="$FUNCTIONAPP_NAME"
+                  STORAGE_NAME="miniprojetostorage20"
+                  PRINCIPAL_ID=$(az functionapp show --resource-group "$RG" --name "$FUNC_NAME" --query identity.principalId -o tsv)
+                  if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
+                    STORAGE_SCOPE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+                    az role assignment create --assignee-object-id "$PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "$STORAGE_SCOPE" || echo "Role já atribuída ou falha."
+                  else
+                    echo "Function App não tem identidade configurada ou não existe."
+                  fi
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1
