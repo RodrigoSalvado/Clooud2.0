@@ -18,6 +18,8 @@ jobs:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
+      # Exemplo: você pode definir em secrets ou capturar numa etapa anterior:
+      # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
 
     steps:
       - name: Checkout do repositório
@@ -92,6 +94,7 @@ jobs:
                 enableBlobVersioning=true \
                 blobSoftDeleteDays=7 \
               --only-show-errors
+            echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
       - name: Deploy CosmosDB (pular se já existe)
         uses: azure/cli@v1
@@ -104,13 +107,11 @@ jobs:
               exit 0
             fi
 
-            # Verifica se a conta Cosmos já existe no Resource Group
             if az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
               echo "Conta Cosmos DB '$ACCOUNT_NAME' já existe em RG '$RG'. Pulando deploy."
             else
               echo "Conta Cosmos DB '$ACCOUNT_NAME' NÃO existe. Realizando deploy em francecentral..."
               DEPLOY_NAME="deploy-cosmos-$(date +%s)"
-              # Ajuste a região principal conforme desejado. Se quiser fallback, implemente loop de regiões como no exemplo anterior.
               az deployment group create \
                 --name "$DEPLOY_NAME" \
                 --resource-group "$RG" \
@@ -144,6 +145,7 @@ jobs:
                 capacity=1 \
                 isLinux=true \
               --only-show-errors
+            echo "App Service Plan deploy concluído: $DEPLOY_NAME"
 
       - name: Gerar SAS token Storage (opcional)
         id: gen_sas
@@ -194,7 +196,7 @@ jobs:
                 containerName="$CONTAINER_NAME" \
                 containerSasToken="$SAS_TOKEN" \
               --only-show-errors
-            echo "Web App deploy: $DEPLOY_NAME"
+            echo "Web App deploy concluído: $DEPLOY_NAME"
 
       - name: Deploy Function App em Python (sem App Insights)
         uses: azure/cli@v1
@@ -202,8 +204,16 @@ jobs:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-funcapp-$(date +%s)"
-            FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
+            FUNC_NAME="$FUNCTIONAPP_NAME"
             STORAGE_ACCOUNT_NAME="miniprojetostorage20"
+            # Se necessário, obtenha o resourceId do App Service Plan do Function:
+            # PLAN_ID=$(az appservice plan show --name ASP-teste-84a9 --resource-group teste --query id -o tsv)
+            PLAN_ID="${FUNCTION_PLAN_RESOURCE_ID:-''}"
+            if [ -z "$PLAN_ID" ]; then
+              echo "Resource ID do App Service Plan não fornecido. Ajuste a variável FUNCTION_PLAN_RESOURCE_ID."
+              exit 1
+            fi
+
             echo "Deploy Function App ($FUNC_NAME) sem App Insights..."
             az deployment group create \
               --name "$DEPLOY_NAME" \
@@ -211,9 +221,12 @@ jobs:
               --template-file templates/function-app.bicep \
               --parameters \
                 functionAppName="$FUNC_NAME" \
+                serverFarmId="$PLAN_ID" \
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
-            echo "Function App deploy: $DEPLOY_NAME"
-
+                storageConnectionString="" \
+                packageContainerUrl="" \
+              --only-show-errors
+            echo "Function App deploy concluído: $DEPLOY_NAME"
 
       - name: Atribuir role ao Web App sobre Storage (opcional)
         uses: azure/cli@v1
@@ -235,7 +248,7 @@ jobs:
         with:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
-            FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
+            FUNC_NAME="$FUNCTIONAPP_NAME"
             STORAGE_NAME="miniprojetostorage20"
             PRINCIPAL_ID=$(az functionapp show --resource-group "$RG" --name "$FUNC_NAME" --query identity.principalId -o tsv)
             if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
