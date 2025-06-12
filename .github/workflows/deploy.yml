@@ -212,7 +212,10 @@ jobs:
             # Configurações de App Insights para Web
             CREATE_AI_WEB=true
             AI_WEB_NAME="${{ env.APPINSIGHTS_WEB_NAME }}"
-            APPINSIGHTS_WEB_ID=""  # se quiser ligar existente, preencha aqui
+            # Se quiser usar AI existente, em vez de criar, faça:
+            # CREATE_AI_WEB=false
+            # e recupere a Instrumentation Key antes e passe appInsightsInstrumentationKey
+            APPINSIGHTS_WEB_KEY=""  # se for usar existente, preencha a Instrumentation Key aqui
 
             echo "Deploy Web App ($WEBAPP_NAME) com createAppInsights=$CREATE_AI_WEB..."
             az deployment group create \
@@ -231,7 +234,7 @@ jobs:
                 containerSasToken="$SAS_TOKEN" \
                 createAppInsights=$CREATE_AI_WEB \
                 appInsightsName="$AI_WEB_NAME" \
-                appInsightsResourceId="$APPINSIGHTS_WEB_ID" \
+                appInsightsInstrumentationKey="$APPINSIGHTS_WEB_KEY" \
                 enableManagedIdentity=true \
               --only-show-errors
             echo "Web App deploy: $DEPLOY_NAME"
@@ -253,19 +256,19 @@ jobs:
               --only-show-errors
             echo "App Insights Function deploy: $DEPLOY_NAME"
 
-      - name: Obter App Insights ID para Function
+      - name: Obter Instrumentation Key do App Insights Function
         id: get_ai_func
         run: |
           RG="MiniProjetoCloud2.0"
-          AI_ID=$(az resource show \
+          AI_NAME="${{ env.APPINSIGHTS_FUNC_NAME }}"
+          INSTR_KEY=$(az monitor app-insights component show \
+            --app "$AI_NAME" \
             --resource-group "$RG" \
-            --name "${{ env.APPINSIGHTS_FUNC_NAME }}" \
-            --resource-type "microsoft.insights/components" \
-            --query id -o tsv 2>/dev/null || echo "")
-          if [ -z "$AI_ID" ]; then
-            echo "Não encontrou Application Insights '${{ env.APPINSIGHTS_FUNC_NAME }}'."
+            --query instrumentationKey -o tsv 2>/dev/null || echo "")
+          if [ -z "$INSTR_KEY" ]; then
+            echo "Não encontrou Application Insights '$AI_NAME' ou sem key."
           else
-            echo "AI_ID=$AI_ID" >> $GITHUB_OUTPUT
+            echo "FUNCTION_APP_INSIGHTS_KEY=$INSTR_KEY" >> $GITHUB_OUTPUT
           fi
 
       - name: Deploy Function App em Python
@@ -276,9 +279,10 @@ jobs:
             DEPLOY_NAME="deploy-funcapp-$(date +%s)"
             FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
             STORAGE_ACCOUNT_NAME="miniprojetostorage20"
-            APPINSIGHTS_FUNC_ID="${{ steps.get_ai_func.outputs.AI_ID }}"
             CREATE_AI_FUNC=false
-            echo "Deploy Function App ($FUNC_NAME) com AppInsights ID: $APPINSIGHTS_FUNC_ID"
+            AI_FUNC_NAME="${{ env.APPINSIGHTS_FUNC_NAME }}"
+            AI_FUNC_KEY="${{ steps.get_ai_func.outputs.FUNCTION_APP_INSIGHTS_KEY }}"
+            echo "Deploy Function App ($FUNC_NAME) com createAppInsights=$CREATE_AI_FUNC..."
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
@@ -287,8 +291,8 @@ jobs:
                 functionAppName="$FUNC_NAME" \
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
                 createAppInsights=$CREATE_AI_FUNC \
-                appInsightsName="${{ env.APPINSIGHTS_FUNC_NAME }}" \
-                appInsightsResourceId="$APPINSIGHTS_FUNC_ID" \
+                appInsightsName="$AI_FUNC_NAME" \
+                appInsightsInstrumentationKey="$AI_FUNC_KEY" \
               --only-show-errors
             echo "Function App deploy: $DEPLOY_NAME"
 
