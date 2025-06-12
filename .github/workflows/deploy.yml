@@ -83,6 +83,7 @@ jobs:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-storage-$(date +%s)"
+            echo "Deploy Storage Account: $DEPLOY_NAME"
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
@@ -92,8 +93,7 @@ jobs:
                 containerName='reddit-posts' \
                 enableBlobVersioning=true \
                 blobSoftDeleteDays=7 \
-                --only-show-errors
-            echo "Storage Account + Container deploy: $DEPLOY_NAME"
+              --only-show-errors
 
       - name: Deploy CosmosDB (fallback se necessário/quota)
         uses: azure/cli@v1
@@ -131,6 +131,7 @@ jobs:
               fi
 
               DEPLOY_NAME="deploy-cosmos-${region}-$(date +%s)"
+              echo "Deploy Cosmos: $DEPLOY_NAME"
               if az deployment group create \
                   --name "$DEPLOY_NAME" \
                   --resource-group "$RG" \
@@ -162,6 +163,7 @@ jobs:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-asp-web-$(date +%s)"
+            echo "Deploy App Service Plan: $DEPLOY_NAME"
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
@@ -173,7 +175,6 @@ jobs:
                 capacity=1 \
                 isLinux=true \
               --only-show-errors
-            echo "App Service Plan deploy: $DEPLOY_NAME"
 
       - name: Gerar SAS token Storage (opcional)
         id: gen_sas
@@ -200,7 +201,6 @@ jobs:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
             DEPLOY_NAME="deploy-webapp-$(date +%s)"
-            # PARAMS:
             WEBAPP_NAME="minhaapp-rodrig0salv"
             PLAN_NAME="ASP-MiniProjetoCloud2.0"
             IMAGE_NAME="rodrig0salv/minha-app:latest"
@@ -209,31 +209,31 @@ jobs:
             SAS_TOKEN="${{ steps.gen_sas.outputs.SAS_TOKEN }}"
             [ -z "$SAS_TOKEN" ] && SAS_TOKEN=""
 
-            # Criar ou ligar App Insights para Web App
+            # Configurações de App Insights para Web
             CREATE_AI_WEB=true
             AI_WEB_NAME="${{ env.APPINSIGHTS_WEB_NAME }}"
-            # Se quiser ligar um existente, defina APPINSIGHTS_WEB_ID como resourceId; caso contrário deixe vazio:
-            APPINSIGHTS_WEB_ID=""
+            APPINSIGHTS_WEB_ID=""  # se quiser ligar existente, preencha aqui
 
-            # Se for ligar existente, use: CREATE_AI_WEB=false e preencha APPINSIGHTS_WEB_ID
             echo "Deploy Web App ($WEBAPP_NAME) com createAppInsights=$CREATE_AI_WEB..."
-
-            # Chamamos o template web-app.bicep, que deve declarar:
-            # param webAppName string
-            # param planName string
-            # param imageName string
-            # param containerRegistryUrl string = ''
-            # param containerRegistryUsername string = ''
-            # param containerRegistryPassword string = ''
-            # param storageAccountName string = ''
-            # param containerName string = ''
-            # param containerSasToken string = ''
-            # param createAppInsights bool
-            # param appInsightsName string
-            # param appInsightsResourceId string
-            DEPLOY_CMD="az deployment group create --name $DEPLOY_NAME --resource-group $RG --template-file templates/web-app.bicep --parameters webAppName=$WEBAPP_NAME planName=$PLAN_NAME imageName=$IMAGE_NAME containerRegistryUrl='' containerRegistryUsername='' containerRegistryPassword='' storageAccountName=$STORAGE_ACCOUNT_NAME containerName=$CONTAINER_NAME containerSasToken='$SAS_TOKEN' createAppInsights=$CREATE_AI_WEB appInsightsName=$AI_WEB_NAME appInsightsResourceId='$APPINSIGHTS_WEB_ID'"
-            echo "$DEPLOY_CMD"
-            eval $DEPLOY_CMD
+            az deployment group create \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
+              --template-file templates/web-app.bicep \
+              --parameters \
+                webAppName="$WEBAPP_NAME" \
+                planName="$PLAN_NAME" \
+                imageName="$IMAGE_NAME" \
+                containerRegistryUrl='' \
+                containerRegistryUsername='' \
+                containerRegistryPassword='' \
+                storageAccountName="$STORAGE_ACCOUNT_NAME" \
+                containerName="$CONTAINER_NAME" \
+                containerSasToken="$SAS_TOKEN" \
+                createAppInsights=$CREATE_AI_WEB \
+                appInsightsName="$AI_WEB_NAME" \
+                appInsightsResourceId="$APPINSIGHTS_WEB_ID" \
+                enableManagedIdentity=true \
+              --only-show-errors
             echo "Web App deploy: $DEPLOY_NAME"
 
       - name: Deploy Application Insights (Function) se precisar criar
@@ -241,18 +241,15 @@ jobs:
         with:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
-            # Se preferir ligar existente, ajuste APPINSIGHTS_FUNC_ID abaixo.
             APPINSIGHTS_FUNC_NAME="${{ env.APPINSIGHTS_FUNC_NAME }}"
             DEPLOY_NAME="deploy-ai-func-$(date +%s)"
             echo "Deploy App Insights para Function: $APPINSIGHTS_FUNC_NAME"
-            # template app-insights.bicep deve declarar:
-            # param appInsightsName string
-            # output appInsightsResourceId string = component.id
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/app-insights.bicep \
-              --parameters appInsightsName="$APPINSIGHTS_FUNC_NAME" \
+              --parameters \
+                appInsightsName="$APPINSIGHTS_FUNC_NAME" \
               --only-show-errors
             echo "App Insights Function deploy: $DEPLOY_NAME"
 
@@ -260,7 +257,6 @@ jobs:
         id: get_ai_func
         run: |
           RG="MiniProjetoCloud2.0"
-          # Se criou via deployment acima, o recurso existe como name APPINSIGHTS_FUNC_NAME
           AI_ID=$(az resource show \
             --resource-group "$RG" \
             --name "${{ env.APPINSIGHTS_FUNC_NAME }}" \
@@ -280,22 +276,19 @@ jobs:
             DEPLOY_NAME="deploy-funcapp-$(date +%s)"
             FUNC_NAME="${{ env.FUNCTIONAPP_NAME }}"
             STORAGE_ACCOUNT_NAME="miniprojetostorage20"
-            # Pega AI ID do passo anterior
             APPINSIGHTS_FUNC_ID="${{ steps.get_ai_func.outputs.AI_ID }}"
             CREATE_AI_FUNC=false
-            # Se preferir criar dentro do template function-app.bicep, ajuste CREATE_AI_FUNC=true e passe appInsightsName
             echo "Deploy Function App ($FUNC_NAME) com AppInsights ID: $APPINSIGHTS_FUNC_ID"
-            # template function-app.bicep deve declarar:
-            # param functionAppName string
-            # param storageAccountName string
-            # param createAppInsights bool
-            # param appInsightsName string
-            # param appInsightsResourceId string
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/function-app.bicep \
-              --parameters functionAppName="$FUNC_NAME" storageAccountName="$STORAGE_ACCOUNT_NAME" createAppInsights=$CREATE_AI_FUNC appInsightsName='${{ env.APPINSIGHTS_FUNC_NAME }}' appInsightsResourceId="$APPINSIGHTS_FUNC_ID" \
+              --parameters \
+                functionAppName="$FUNC_NAME" \
+                storageAccountName="$STORAGE_ACCOUNT_NAME" \
+                createAppInsights=$CREATE_AI_FUNC \
+                appInsightsName="${{ env.APPINSIGHTS_FUNC_NAME }}" \
+                appInsightsResourceId="$APPINSIGHTS_FUNC_ID" \
               --only-show-errors
             echo "Function App deploy: $DEPLOY_NAME"
 
