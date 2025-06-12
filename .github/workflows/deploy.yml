@@ -208,7 +208,7 @@ jobs:
 
       - name: Instalar Azure Functions Core Tools
         run: |
-          # Se npm não existir, instala Node.js/npm
+          # Executado no runner Ubuntu, não no container azure-cli
           if ! command -v npm &>/dev/null; then
             sudo apt-get update
             sudo apt-get install -y nodejs npm
@@ -219,28 +219,12 @@ jobs:
         env:
           RG: ${{ env.RG }}
           FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
-          AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc" 
+          AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc"
         run: |
+          # Atenção: este step roda no runner Ubuntu após login via azure/login
           cd "$AZURE_FUNCTIONAPP_PACKAGE_PATH"
           echo "Publicando Function App '$FUNCTIONAPP_NAME' em RG '$RG'..."
           func azure functionapp publish "$FUNCTIONAPP_NAME" --python
-
-
-      - name: Publicar código das Functions (zip-deploy) via Azure CLI
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            ZIP_NAME="redditIngestFunc.zip"
-            if [ ! -f "$ZIP_NAME" ]; then
-              echo "Arquivo $ZIP_NAME não encontrado. Abortando."
-              exit 1
-            fi
-            echo "Fazendo zip-deploy para Function App '$FUNCTIONAPP_NAME'..."
-            az functionapp deployment source config-zip \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --src "$ZIP_NAME"
-            echo "Publicação concluída."
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
