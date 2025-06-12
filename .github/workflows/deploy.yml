@@ -93,66 +93,37 @@ jobs:
                 blobSoftDeleteDays=7 \
               --only-show-errors
 
-      - name: Deploy CosmosDB (fallback se necessário/quota)
+      - name: Deploy CosmosDB (pular se já existe)
         uses: azure/cli@v1
         with:
           inlineScript: |
             RG="MiniProjetoCloud2.0"
-            if [ -z "${COSMOS_ACCOUNT_NAME}" ]; then
-              echo "Pular Cosmos DB."
+            ACCOUNT_NAME="${COSMOS_ACCOUNT_NAME}"
+            if [ -z "$ACCOUNT_NAME" ]; then
+              echo "Variável COSMOS_ACCOUNT_NAME vazia: pulando Cosmos DB."
               exit 0
             fi
-            COSMOS_PRIMARY_LOCATION='francecentral'
-            COSMOS_FALLBACK_LOCATIONS='westeurope northeurope eastus uksouth'
-            LOCATIONS_TO_TRY=("$COSMOS_PRIMARY_LOCATION")
-            for loc in $COSMOS_FALLBACK_LOCATIONS; do LOCATIONS_TO_TRY+=("$loc"); done
-            ACCOUNT_NAME="${COSMOS_ACCOUNT_NAME}"
-            SUCCESS=false
-            for region in "${LOCATIONS_TO_TRY[@]}"; do
-              echo "Tentando Cosmos DB '$ACCOUNT_NAME' em $region..."
-              EXISTE_JSON=$(az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" -o json 2>/dev/null || echo "")
-              if [ -n "$EXISTE_JSON" ]; then
-                STATE=$(echo "$EXISTE_JSON" | jq -r '.properties.provisioningState // ""')
-                if [ "$STATE" != "Succeeded" ]; then
-                  echo "Estado existente: $STATE. Excluindo para recriar..."
-                  az cosmosdb delete --name "$ACCOUNT_NAME" --resource-group "$RG" --yes
-                  for i in {1..30}; do
-                    if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
-                      echo "Instância anterior removida."
-                      break
-                    fi
-                    sleep 5
-                  done
-                else
-                  echo "Cosmos existente em Succeeded; atualizando nesta região ($region) se aplicável."
-                fi
-              fi
 
-              DEPLOY_NAME="deploy-cosmos-${region}-$(date +%s)"
-              echo "Deploy Cosmos: $DEPLOY_NAME"
-              if az deployment group create \
-                  --name "$DEPLOY_NAME" \
-                  --resource-group "$RG" \
-                  --template-file templates/cosmosdb.bicep \
-                  --parameters \
-                    cosmosAccountName="$ACCOUNT_NAME" \
-                    cosmosLocation="$region" \
-                    cosmosDatabaseName='RedditApp' \
-                    cosmosContainerName='posts' \
-                    cosmosPartitionKeyPath='/id' \
-                    cosmosThroughput=${COSMOS_THROUGHPUT} \
-                  --only-show-errors; then
-                echo "✅ Cosmos DB OK em $region (deployment $DEPLOY_NAME)"
-                SUCCESS=true
-                break
-              else
-                echo "❌ Falhou deploy Cosmos em $region. Tentando próxima..."
-              fi
-            done
-
-            if [ "$SUCCESS" != "true" ]; then
-              echo "❌ Falha em criar Cosmos DB em todas regiões: ${LOCATIONS_TO_TRY[*]}"
-              exit 1
+            # Verifica se a conta Cosmos já existe no Resource Group
+            if az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
+              echo "Conta Cosmos DB '$ACCOUNT_NAME' já existe em RG '$RG'. Pulando deploy."
+            else
+              echo "Conta Cosmos DB '$ACCOUNT_NAME' NÃO existe. Realizando deploy em francecentral..."
+              DEPLOY_NAME="deploy-cosmos-$(date +%s)"
+              # Ajuste a região principal conforme desejado. Se quiser fallback, implemente loop de regiões como no exemplo anterior.
+              az deployment group create \
+                --name "$DEPLOY_NAME" \
+                --resource-group "$RG" \
+                --template-file templates/cosmosdb.bicep \
+                --parameters \
+                  cosmosAccountName="$ACCOUNT_NAME" \
+                  cosmosLocation='francecentral' \
+                  cosmosDatabaseName='RedditApp' \
+                  cosmosContainerName='posts' \
+                  cosmosPartitionKeyPath='/id' \
+                  cosmosThroughput=${COSMOS_THROUGHPUT} \
+                --only-show-errors
+              echo "Deploy Cosmos concluído: $DEPLOY_NAME"
             fi
 
       - name: Deploy App Service Plan para Web App
@@ -193,7 +164,7 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
-      - name: Deploy Web App (sem App Insights)
+      - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -243,7 +214,6 @@ jobs:
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
               --only-show-errors
             echo "Function App deploy: $DEPLOY_NAME"
-
 
       - name: Atribuir role ao Web App sobre Storage (opcional)
         uses: azure/cli@v1
