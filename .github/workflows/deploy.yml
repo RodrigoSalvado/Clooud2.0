@@ -206,25 +206,25 @@ jobs:
               --only-show-errors
             echo "Function App deployment concluído: $DEPLOY_NAME"
 
-      - name: Instalar zip no runner (para compactar funções)
+      - name: Instalar Azure Functions Core Tools
         run: |
-          if ! command -v zip &>/dev/null; then
+          # Se npm não existir, instala Node.js/npm
+          if ! command -v npm &>/dev/null; then
             sudo apt-get update
-            sudo apt-get install -y zip
+            sudo apt-get install -y nodejs npm
           fi
+          npm install -g azure-functions-core-tools@4 --unsafe-perm true
 
-      - name: Compactar Azure Functions localmente
+      - name: Publicar Azure Function App com Remote Build
+        env:
+          RG: ${{ env.RG }}
+          FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
+          AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc" 
         run: |
-          FUNC_DIR="redditIngestFunc"
-          ZIP_NAME="redditIngestFunc.zip"
-          if [ ! -d "$FUNC_DIR" ]; then
-            echo "Diretório $FUNC_DIR não existe. Abortando."
-            exit 1
-          fi
-          echo "Compactando $FUNC_DIR em $ZIP_NAME..."
-          rm -f "$ZIP_NAME"
-          zip -r "$ZIP_NAME" "$FUNC_DIR"/*
-          echo "ZIP criado: $ZIP_NAME"
+          cd "$AZURE_FUNCTIONAPP_PACKAGE_PATH"
+          echo "Publicando Function App '$FUNCTIONAPP_NAME' em RG '$RG'..."
+          func azure functionapp publish "$FUNCTIONAPP_NAME" --python
+
 
       - name: Publicar código das Functions (zip-deploy) via Azure CLI
         uses: azure/cli@v1
