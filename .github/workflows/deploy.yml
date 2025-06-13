@@ -173,11 +173,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build da imagem Docker da Web App
         run: |
           echo "A construir a imagem Docker: rodrig0salv/minha-app:latest"
-          # Ajusta o contexto se o Dockerfile estiver noutro diretório
-          docker build -t rodrig0salv/minha-app:latest .
+          # Contexto e Dockerfile em ./web-app
+          docker build -t rodrig0salv/minha-app:latest ./web-app
+
       - name: Push da imagem Docker para Docker Hub
         run: |
           echo "A enviar a imagem Docker para Docker Hub"
@@ -196,6 +198,7 @@ jobs:
               --parameters \
                 webAppName="$WEBAPP_NAME" \
                 planName="ASP-MiniProjetoCloud2.0" \
+                # Aponta para a imagem que acabámos de pushar
                 imageName="rodrig0salv/minha-app:latest" \
                 containerRegistryUrl='' \
                 containerRegistryUsername='' \
