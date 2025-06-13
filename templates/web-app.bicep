@@ -32,7 +32,8 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
-var baseAppSettings = [
+// 1) Anotar explicitamente baseAppSettings como array
+var baseAppSettings array = [
   {
     name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
     value: 'false'
@@ -51,6 +52,7 @@ var baseAppSettings = [
   }
 ]
 
+// 2) Variáveis para configurações opcionais, já declaradas como array
 var privateRegistrySettings array = usePrivateRegistry ? [
   {
     name: 'DOCKER_REGISTRY_SERVER_URL'
@@ -91,7 +93,14 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
         ]
       }
 
-      appSettings: baseAppSettings + privateRegistrySettings + functionUrlSettings
+      // 3) Usar concat() para juntar arrays
+      appSettings: concat(
+        concat(
+          baseAppSettings,
+          privateRegistrySettings
+        ),
+        functionUrlSettings
+      )
 
       http20Enabled: true
     }
