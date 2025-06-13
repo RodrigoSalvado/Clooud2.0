@@ -156,26 +156,35 @@ jobs:
             CONTAINER_NAME="${CONTAINER_NAME}"
             # Gera token SAS com permissão de leitura, escrita e delete (para overwrite, se necessário)
             EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
+
+            # 1) Obter account key da Storage Account
+            ACCOUNT_KEY=$(az storage account keys list \
+              --account-name "$ACCOUNT_NAME" \
+              --resource-group "$RG" \
+              --query "[0].value" -o tsv)
+
+            # 2) Gerar SAS usando a account key, garantindo que inclua permissões raclwd
             sasToken=$(az storage container generate-sas \
               --account-name "$ACCOUNT_NAME" \
+              --account-key "$ACCOUNT_KEY" \
               --name "$CONTAINER_NAME" \
               --permissions raclwd \
               --expiry "$EXPIRY" \
               --https-only \
-              --auth-mode login \
-              --as-user \
               -o tsv)
 
-            # Obter endpoint blob da Storage Account
+            # 3) Montar endpoint completo do container com SAS
             blobEndpoint=$(az storage account show \
               --name "$ACCOUNT_NAME" \
               --query "primaryEndpoints.blob" -o tsv)
             blobEndpoint=${blobEndpoint%/}   # remove possível barra final
 
-            # Montar URL completo do container com SAS
             fullSasUrl="${blobEndpoint}/${CONTAINER_NAME}?${sasToken}"
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
             echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
+
+            # DEBUG: exibir no log para verificação
+            echo "DEBUG: fullSasUrl = $fullSasUrl"
 
       - name: Login Docker Hub
         uses: docker/login-action@v2
@@ -267,10 +276,21 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            DEPLOY_NAME="deploy-webapp-$(date +%s)"
-            echo "Deploy Web App ($WEBAPP_NAME) via Bicep, incluindo FUNCTION_URL e CONTAINER_ENDPOINT_SAS..."
+            SAS_FULL="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}"
+            echo "DEBUG: SAS_FULL para deploy do Web App: $SAS_FULL"
+
+            # Definir explicitamente a App Setting antes do deploy Bicep (opcional para garantir)
+            echo "Definindo App Setting CONTAINER_ENDPOINT_SAS via CLI antes do deploy Bicep..."
+            az webapp config appsettings set \
+              --resource-group "$RG" \
+              --name "$WEBAPP_NAME" \
+              --settings CONTAINER_ENDPOINT_SAS="$SAS_FULL" \
+              --only-show-errors
+            echo "App Setting CONTAINER_ENDPOINT_SAS definida."
+
+            echo "Agora deploy via Bicep (incluindo FUNCTION_URL, containerSasToken e containerEndpointSas)..."
             az deployment group create \
-              --name "$DEPLOY_NAME" \
+              --name "deploy-webapp-$(date +%s)" \
               --resource-group "$RG" \
               --template-file templates/web-app.bicep \
               --parameters \
@@ -284,9 +304,9 @@ jobs:
                 containerName="${CONTAINER_NAME}" \
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
-                containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
+                containerEndpointSas="$SAS_FULL" \
               --only-show-errors
-            echo "Web App deployment concluído: $DEPLOY_NAME"
+            echo "Web App deployment concluído."
 
       - name: Configurar runtime Python no Function App
         uses: azure/cli@v1
@@ -311,15 +331,22 @@ jobs:
           inlineScript: |
             DEPLOY_WEB_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-webapp-')]|[0].name" -o tsv)
             if [ -n "$DEPLOY_WEB_NAME" ]; then
-              echo "Deployment Web App: $DEPLOY_WEB_NAME"
+              echo "Deployment Web App: $DEPLOY_NAME"
               az deployment group show --resource-group "$RG" --name "$DEPLOY_WEB_NAME" --query properties.outputs
             else
               echo "Não encontrou deployment Web App."
             fi
             DEPLOY_FUNC_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-funcapp-')]|[0].name" -o tsv)
             if [ -n "$DEPLOY_FUNC_NAME" ]; then
-              echo "Deployment Function App: $DEPLOY_FUNC_NAME"
+              echo "Deployment Function App: $DEPLOY_NAME"
               az deployment group show --resource-group "$RG" --name "$DEPLOY_FUNC_NAME" --query properties.outputs
             else
               echo "Não encontrou deployment Function App."
             fi
+
+      - name: Verificar App Settings do Web App
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "App Settings de $WEBAPP_NAME após deploy:"
+            az webapp config appsettings list --resource-group "$RG" --name "$WEBAPP_NAME" -o table
