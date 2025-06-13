@@ -360,3 +360,6 @@ jobs:
             else
               echo "Não encontrou deployment Function App."
             fi
+
+
+            
