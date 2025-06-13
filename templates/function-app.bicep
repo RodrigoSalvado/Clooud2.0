@@ -73,8 +73,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         allowedOrigins: [
           'https://portal.azure.com'
         ]
-        // supportCredentials pode ser adicionado se for necessário enviar cookies/autenticação
-        // supportCredentials: false
+        supportCredentials: true
       }
       appSettings: [
         // Runtime
