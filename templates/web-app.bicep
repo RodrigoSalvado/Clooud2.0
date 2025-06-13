@@ -41,6 +41,48 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
+// Define arrays de appSettings
+var baseAppSettings = [
+  {
+    name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
+    value: 'false'
+  }
+  {
+    name: 'STORAGE_ACCOUNT_NAME'
+    value: storageAccountName
+  }
+  {
+    name: 'CONTAINER_NAME'
+    value: containerName
+  }
+  {
+    name: 'CONTAINER_SAS_TOKEN'
+    value: containerSasToken
+  }
+]
+
+var privateRegistrySettings = usePrivateRegistry ? [
+  {
+    name: 'DOCKER_REGISTRY_SERVER_URL'
+    value: containerRegistryUrl
+  }
+  {
+    name: 'DOCKER_REGISTRY_SERVER_USERNAME'
+    value: containerRegistryUsername
+  }
+  {
+    name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
+    value: containerRegistryPassword
+  }
+] : []
+
+var functionUrlSettings = addFunctionUrl ? [
+  {
+    name: 'FUNCTION_URL'
+    value: functionUrl
+  }
+] : []
+
 // Criação / atualização do Web App Linux em container
 resource webApp 'Microsoft.Web/sites@2021-03-01' = {
   name: webAppName
@@ -50,58 +92,15 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     siteConfig: {
-      // Configuração do container Docker
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
 
-      // CORS: origens permitidas
       cors: {
         allowedOrigins: allowedCorsOrigins
       }
 
-      // App settings para a aplicação
-      appSettings: [
-        {
-          name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
-          value: 'false'
-        }
-        {
-          name: 'STORAGE_ACCOUNT_NAME'
-          value: storageAccountName
-        }
-        {
-          name: 'CONTAINER_NAME'
-          value: containerName
-        }
-        {
-          name: 'CONTAINER_SAS_TOKEN'
-          value: containerSasToken
-        }
-        // Se usar registry privado, adiciona estas settings:
-        if (usePrivateRegistry) {
-          {
-            name: 'DOCKER_REGISTRY_SERVER_URL'
-            value: containerRegistryUrl
-          }
-          {
-            name: 'DOCKER_REGISTRY_SERVER_USERNAME'
-            value: containerRegistryUsername
-          }
-          {
-            name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
-            value: containerRegistryPassword
-          }
-        }
-        // Se fornecido functionUrl, adiciona app setting FUNCTION_URL
-        if (addFunctionUrl) {
-          {
-            name: 'FUNCTION_URL'
-            value: functionUrl
-          }
-        }
-      ]
+      appSettings: baseAppSettings + privateRegistrySettings + functionUrlSettings
 
-      // Habilita HTTP/2
       http20Enabled: true
     }
   }
