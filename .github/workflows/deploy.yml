@@ -22,9 +22,10 @@ jobs:
       TARGET_LOCATION: 'francecentral'
       WEBAPP_NAME: 'minhaapp-rodrig0salv'
       AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
-      TRANSLATOR_NAME: '<SEU_TRANSLATOR_EXISTENTE>'       # Defina o nome do Translator que você já criou
-      TRANSLATOR_RG: '<RG_DO_TRANSLATOR>'                 # RG onde o Translator existe
-      # Se usar plano existente, defina em secrets ou variável:
+      # Removidas variáveis do Translator
+      # TRANSLATOR_NAME: 'translator'
+      # TRANSLATOR_RG: 'MiniProjetoCloud2.0'
+      # Se usar plano existente, definir em secrets ou variável:
       # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
 
     steps:
@@ -248,90 +249,12 @@ jobs:
           echo "Publicando Function App '$FUNCTIONAPP_NAME' em RG '$RG'..."
           func azure functionapp publish "$FUNCTIONAPP_NAME" --python
 
-      - name: Criar Translator Free em região suportada e configurar App Settings
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            RG="${{ env.RG }}"
-            TRANSLATOR_NAME="${{ env.TRANSLATOR_NAME }}"
-            # Lista de regiões onde você confirmou suporte ao SKU F0 para Translator
-            REGIONS_CANDIDATAS=("francecentral" "uksouth" "westus2" "westeurope" "eastus" "northeurope") 
-            SUCESSO=0
-
-            # 1. Verifica se já existe ativo
-            if az cognitiveservices account show --name "$TRANSLATOR_NAME" --resource-group "$RG" &>/dev/null; then
-              echo "Translator '$TRANSLATOR_NAME' já existe ativo no RG '$RG'. Usando-o."
-              SUCESSO=1
-            else
-              # 2. Verifica soft-deleted e purga
-              for loc in "${REGIONS_CANDIDATAS[@]}"; do
-                deleted=$(az cognitiveservices account list-deleted --location "$loc" --query "[?name=='$TRANSLATOR_NAME']")
-                if [ "$deleted" != "[]" ]; then
-                  echo "Encontrado soft-deleted em $loc, fazendo purge..."
-                  az cognitiveservices account purge --location "$loc" --resource-group "$RG" --name "$TRANSLATOR_NAME"
-                  # Após purge, aguardar um pouco antes de criar
-                  sleep 10
-                  break
-                fi
-              done
-
-              # 3. Tenta criar em cada região
-              for loc in "${REGIONS_CANDIDATAS[@]}"; do
-                echo "Tentando criar Translator '$TRANSLATOR_NAME' em $loc..."
-                if az cognitiveservices account create \
-                     --name "$TRANSLATOR_NAME" \
-                     --resource-group "$RG" \
-                     --kind Translator \
-                     --sku F0 \
-                     --location "$loc" \
-                     --yes; then
-                  echo "Criado Translator '$TRANSLATOR_NAME' em $loc."
-                  SUCESSO=1
-                  break
-                else
-                  echo "Falhou ao criar em $loc. Verificando próxima região."
-                fi
-              done
-            fi
-
-            if [ $SUCESSO -ne 1 ]; then
-              echo "Erro: não conseguiu criar ou localizar Translator Free em nenhuma região candidata."
-              exit 1
-            fi
-
-            # 4. Obter endpoint e chave
-            echo "Obtendo endpoint e chave do Translator '$TRANSLATOR_NAME'..."
-            ENDPOINT=$(az cognitiveservices account show \
-              --name "$TRANSLATOR_NAME" \
-              --resource-group "$RG" \
-              --query "properties.endpoint" -o tsv)
-            KEY=$(az cognitiveservices account keys list \
-              --name "$TRANSLATOR_NAME" \
-              --resource-group "$RG" \
-              --query "key1" -o tsv)
-
-            if [ -z "$ENDPOINT" ] || [ -z "$KEY" ]; then
-              echo "Erro: não obteve endpoint ou chave."
-              exit 1
-            fi
-
-            echo "Configurando App Settings na Function App..."
-            az functionapp config appsettings set \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --settings TRANSLATOR_ENDPOINT="$ENDPOINT" TRANSLATOR_KEY="$KEY"
-            echo "App Settings configuradas."
-
-            # Opcional: também na Web App, se fizer sentido
-            if [ -n "${{ env.WEBAPP_NAME }}" ]; then
-              echo "Configurando App Settings na Web App..."
-              az webapp config appsettings set \
-                --resource-group "$RG" \
-                --name "$WEBAPP_NAME" \
-                --settings TRANSLATOR_ENDPOINT="$ENDPOINT" TRANSLATOR_KEY="$KEY"
-              echo "App Settings configuradas na Web App."
-            fi
-
+      # Removido passo de criar/configurar Translator
+      # - name: Criar Translator Free em região suportada e configurar App Settings
+      #   uses: azure/cli@v1
+      #   with:
+      #     inlineScript: |
+      #       ...
 
       - name: Obter master key da Function App e atualizar Web App
         env:
