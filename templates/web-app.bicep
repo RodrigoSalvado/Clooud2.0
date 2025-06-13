@@ -25,9 +25,6 @@ param containerSasToken string
 @description('URL completa da Function (com master key), para app setting FUNCTION_URL. Se vazio, não adiciona.')
 param functionUrl string = ''
 
-@description('Origens permitidas para CORS. Ex: ["https://meusite.com"]. Use ["*"] com cautela.')
-param allowedCorsOrigins array = []
-
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
 
@@ -54,7 +51,6 @@ var baseAppSettings = [
   }
 ]
 
-// Anotação de tipo “array” garante que [] vazio casa com o tipo
 var privateRegistrySettings array = usePrivateRegistry ? [
   {
     name: 'DOCKER_REGISTRY_SERVER_URL'
@@ -88,8 +84,11 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
 
+      // CORS fixo apenas para portal.azure.com
       cors: {
-        allowedOrigins: allowedCorsOrigins
+        allowedOrigins: [
+          'https://portal.azure.com'
+        ]
       }
 
       appSettings: baseAppSettings + privateRegistrySettings + functionUrlSettings
