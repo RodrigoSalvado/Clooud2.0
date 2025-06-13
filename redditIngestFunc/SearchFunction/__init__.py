@@ -120,7 +120,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "id": p.get("id"),
             "subreddit": p.get("subreddit"),
             "title": p.get("title"),
-            "title_eng": p.get("title_eng"),
+            "selftext": p.get("selftext"),
             "url": p.get("url"),
             "score": p.get("score")
         })
@@ -176,17 +176,18 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
             continue
         title = d.get("title", "")
         # 1) Detecta idioma e traduz apenas se necessário
-        lang = detect_language(title)
-        if lang.lower().startswith('en'):
-            title_eng = title
-        else:
-            title_eng = translate_to_english(title, from_lang=lang)
+        if TRANSLATOR_ENDPOINT or TRANSLATOR_KEY != "":
+            lang = detect_language(title)
+            if lang.lower().startswith('en'):
+                title_eng = title
+            else:
+                title_eng = translate_to_english(title, from_lang=lang)
 
         item = {
             "id":        f"{subreddit}_{rid}",
             "subreddit": subreddit,
             "title":     title,
-            "title_eng": title_eng,
+            "selftext":  d.get("selftext", ""),
             "url":       d.get("url", ""),
             "score":     d.get("score", 0)
         }

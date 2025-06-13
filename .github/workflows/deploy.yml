@@ -248,32 +248,90 @@ jobs:
           echo "Publicando Function App '$FUNCTIONAPP_NAME' em RG '$RG'..."
           func azure functionapp publish "$FUNCTIONAPP_NAME" --python
 
-      - name: Obter endpoint e chave do Translator existente e atualizar Function App
-        env:
-          RG: ${{ env.RG }}
-          FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
-          TRANSLATOR_NAME: ${{ env.TRANSLATOR_NAME }}
-          TRANSLATOR_RG: ${{ env.TRANSLATOR_RG }}
-        run: |
-          echo "Obtendo endpoint e chave do Translator existente '$TRANSLATOR_NAME' em RG '$TRANSLATOR_RG'..."
-          ENDPOINT_TRANSLATOR=$(az cognitiveservices account show \
-            --name "$TRANSLATOR_NAME" \
-            --resource-group "$TRANSLATOR_RG" \
-            --query "properties.endpoint" -o tsv)
-          KEY_TRANSLATOR=$(az cognitiveservices account keys list \
-            --name "$TRANSLATOR_NAME" \
-            --resource-group "$TRANSLATOR_RG" \
-            --query "key1" -o tsv)
-          if [ -z "$ENDPOINT_TRANSLATOR" ] || [ -z "$KEY_TRANSLATOR" ]; then
-            echo "Erro: não obteve endpoint ou chave do Translator existente. Abortando."
-            exit 1
-          fi
-          echo "Configurando App Settings na Function App..."
-          az functionapp config appsettings set \
-            --resource-group "$RG" \
-            --name "$FUNCTIONAPP_NAME" \
-            --settings TRANSLATOR_ENDPOINT="$ENDPOINT_TRANSLATOR" TRANSLATOR_KEY="$KEY_TRANSLATOR"
-          echo "App Settings do Translator ajustados na Function App."
+      - name: Criar Translator Free em região suportada e configurar App Settings
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            RG="${{ env.RG }}"
+            TRANSLATOR_NAME="${{ env.TRANSLATOR_NAME }}"
+            # Lista de regiões onde você confirmou suporte ao SKU F0 para Translator
+            REGIONS_CANDIDATAS=("westus2" "westeurope" "eastus" "northeurope") 
+            SUCESSO=0
+
+            # 1. Verifica se já existe ativo
+            if az cognitiveservices account show --name "$TRANSLATOR_NAME" --resource-group "$RG" &>/dev/null; then
+              echo "Translator '$TRANSLATOR_NAME' já existe ativo no RG '$RG'. Usando-o."
+              SUCESSO=1
+            else
+              # 2. Verifica soft-deleted e purga
+              for loc in "${REGIONS_CANDIDATAS[@]}"; do
+                deleted=$(az cognitiveservices account list-deleted --location "$loc" --query "[?name=='$TRANSLATOR_NAME']")
+                if [ "$deleted" != "[]" ]; then
+                  echo "Encontrado soft-deleted em $loc, fazendo purge..."
+                  az cognitiveservices account purge --location "$loc" --resource-group "$RG" --name "$TRANSLATOR_NAME"
+                  # Após purge, aguardar um pouco antes de criar
+                  sleep 10
+                  break
+                fi
+              done
+
+              # 3. Tenta criar em cada região
+              for loc in "${REGIONS_CANDIDATAS[@]}"; do
+                echo "Tentando criar Translator '$TRANSLATOR_NAME' em $loc..."
+                if az cognitiveservices account create \
+                     --name "$TRANSLATOR_NAME" \
+                     --resource-group "$RG" \
+                     --kind Translator \
+                     --sku F0 \
+                     --location "$loc" \
+                     --yes; then
+                  echo "Criado Translator '$TRANSLATOR_NAME' em $loc."
+                  SUCESSO=1
+                  break
+                else
+                  echo "Falhou ao criar em $loc. Verificando próxima região."
+                fi
+              done
+            fi
+
+            if [ $SUCESSO -ne 1 ]; then
+              echo "Erro: não conseguiu criar ou localizar Translator Free em nenhuma região candidata."
+              exit 1
+            fi
+
+            # 4. Obter endpoint e chave
+            echo "Obtendo endpoint e chave do Translator '$TRANSLATOR_NAME'..."
+            ENDPOINT=$(az cognitiveservices account show \
+              --name "$TRANSLATOR_NAME" \
+              --resource-group "$RG" \
+              --query "properties.endpoint" -o tsv)
+            KEY=$(az cognitiveservices account keys list \
+              --name "$TRANSLATOR_NAME" \
+              --resource-group "$RG" \
+              --query "key1" -o tsv)
+
+            if [ -z "$ENDPOINT" ] || [ -z "$KEY" ]; then
+              echo "Erro: não obteve endpoint ou chave."
+              exit 1
+            fi
+
+            echo "Configurando App Settings na Function App..."
+            az functionapp config appsettings set \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --settings TRANSLATOR_ENDPOINT="$ENDPOINT" TRANSLATOR_KEY="$KEY"
+            echo "App Settings configuradas."
+
+            # Opcional: também na Web App, se fizer sentido
+            if [ -n "${{ env.WEBAPP_NAME }}" ]; then
+              echo "Configurando App Settings na Web App..."
+              az webapp config appsettings set \
+                --resource-group "$RG" \
+                --name "$WEBAPP_NAME" \
+                --settings TRANSLATOR_ENDPOINT="$ENDPOINT" TRANSLATOR_KEY="$KEY"
+              echo "App Settings configuradas na Web App."
+            fi
+
 
       - name: Obter master key da Function App e atualizar Web App
         env:
