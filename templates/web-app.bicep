@@ -22,7 +22,7 @@ param containerName string
 @description('SAS token para o container.')
 param containerSasToken string
 
-@description('URL completa da Function (com master key), para app setting FUNCTION_URL. Se vazio, não adiciona.')
+@description('URL completa da Function (com chave), para app setting FUNCTION_URL. Se vazio, não adiciona.')
 param functionUrl string = ''
 
 var usePrivateRegistry = containerRegistryUrl != ''
@@ -32,7 +32,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
-// 1) Anotar explicitamente baseAppSettings como array
+// 1) baseAppSettings como array explicitamente
 var baseAppSettings array = [
   {
     name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
@@ -52,7 +52,7 @@ var baseAppSettings array = [
   }
 ]
 
-// 2) Variáveis para configurações opcionais, já declaradas como array
+// 2) settings opcionais
 var privateRegistrySettings array = usePrivateRegistry ? [
   {
     name: 'DOCKER_REGISTRY_SERVER_URL'
@@ -83,6 +83,7 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     siteConfig: {
+      // Container image
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
 
@@ -93,7 +94,7 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
         ]
       }
 
-      // 3) Usar concat() para juntar arrays
+      // 3) concatena arrays
       appSettings: concat(
         concat(
           baseAppSettings,

@@ -183,7 +183,32 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      # --- Empacotar e Deploy do Function App via Zip Deploy ---
+      # --- Deploy da Function App via Bicep (para criar/inicializar recurso, caso ainda não exista) ---
+      - name: Deploy Function App via Bicep (template)
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "Deploy Function App ($FUNCTIONAPP_NAME) via Bicep..."
+            az deployment group create \
+              --name "deploy-funcapp-$(date +%s)" \
+              --resource-group "$RG" \
+              --template-file templates/function-app.bicep \
+              --parameters \
+                functionAppName="$FUNCTIONAPP_NAME" \
+                planName="ASP-MiniProjetoCloud2.0" \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                cosmosAccountName="cosmosdbminiprojeto" \
+                cosmosDatabaseName="RedditApp" \
+                cosmosContainerName="posts" \
+                redditUser="Major-Noise-6411" \
+                redditPassword="miniprojetocloud" \
+                secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" \
+                clientIdValue="bzG6zHjC23GSenSIXe0M-Q" \
+                translatorEndpoint="" \
+                translatorKey="" \
+              --only-show-errors
+            echo "Function App deployment via Bicep concluído."
+
       - name: Empacotar código da Function App para Zip Deploy
         run: |
           echo "A empacotar código da Function App..."
@@ -205,32 +230,6 @@ jobs:
               --src "$GITHUB_WORKSPACE/funcapp.zip"
             echo "Zip Deploy da Function concluído."
 
-      # --- Deploy do Function App via Bicep (se necessário inicializar/recriar recursos) ---
-      - name: Deploy Function App via Bicep (template)
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            echo "Deploy Function App ($FUNCTIONAPP_NAME) via Bicep (template)..."
-            az deployment group create \
-              --name "deploy-funcapp-$(date +%s)" \
-              --resource-group "$RG" \
-              --template-file templates/function-app.bicep \
-              --parameters \
-                functionAppName="$FUNCTIONAPP_NAME" \
-                planName="ASP-MiniProjetoCloud2.0" \
-                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
-                cosmosAccountName="cosmosdbminiprojeto" \
-                cosmosDatabaseName="RedditApp" \
-                cosmosContainerName="posts" \
-                redditUser="Major-Noise-6411" \
-                redditPassword="miniprojetocloud" \
-                secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" \
-                clientIdValue="bzG6zHjC23GSenSIXe0M-Q" \
-                translatorEndpoint="" \
-                translatorKey="" \
-              --only-show-errors
-            echo "Function App deployment via Bicep concluído."
-
       - name: Obter master key da Function App
         id: get_function_key
         uses: azure/cli@v1
@@ -250,7 +249,8 @@ jobs:
       - name: Construir FUNCTION_URL_FULL
         id: set_function_url
         run: |
-          FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/SearchFunction?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
+          # Atenção: rota definida no function.json é "route": "search", logo usamos /api/search
+          FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
 
       # --- Deploy do Web App com Function URL e CORS fixo para portal.azure.com ---
@@ -278,14 +278,6 @@ jobs:
               --only-show-errors
             echo "Web App deployment concluído: $DEPLOY_NAME"
 
-      - name: Instalar Azure Functions Core Tools
-        run: |
-          if ! command -v npm &>/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y nodejs npm
-          fi
-          npm install -g azure-functions-core-tools@4 --unsafe-perm true
-
       - name: Configurar runtime Python no Function App
         uses: azure/cli@v1
         with:
@@ -294,26 +286,6 @@ jobs:
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true
-
-      - name: Debug - listar ficheiros e verificar estrutura da pasta das Functions
-        run: |
-          echo "Directório de trabalho atual: $(pwd)"
-          ls -R .
-          if [ -d "${AZURE_FUNCTIONAPP_PACKAGE_PATH}" ]; then
-            echo "Estrutura em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
-            ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-          else
-            echo "Pasta ${AZURE_FUNCTIONAPP_PACKAGE_PATH} não existe! Abortando."
-            exit 1
-          fi
-          if [ ! -f "${AZURE_FUNCTIONAPP_PACKAGE_PATH}/host.json" ]; then
-            echo "ERRO: não encontrei host.json em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-            exit 1
-          fi
-          if [ ! -f "${AZURE_FUNCTIONAPP_PACKAGE_PATH}/requirements.txt" ]; then
-            echo "ERRO: não encontrei requirements.txt em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-            exit 1
-          fi
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
