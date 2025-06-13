@@ -183,7 +183,7 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      # --- Empacotar e Deploy do Function App antes de obter a key ---
+      # --- Empacotar e Deploy do Function App via Zip Deploy ---
       - name: Empacotar código da Function App para Zip Deploy
         run: |
           echo "A empacotar código da Function App..."
@@ -205,7 +205,8 @@ jobs:
               --src "$GITHUB_WORKSPACE/funcapp.zip"
             echo "Zip Deploy da Function concluído."
 
-      - name: Deploy Function App via Bicep (para criar/inicializar recurso, caso ainda não exista)
+      # --- Deploy do Function App via Bicep (se necessário inicializar/recriar recursos) ---
+      - name: Deploy Function App via Bicep (template)
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -236,7 +237,6 @@ jobs:
         with:
           inlineScript: |
             echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
-            # Usar --query "masterKey" para obter host-level master key
             MASTER_KEY=$(az functionapp keys list \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
@@ -245,7 +245,6 @@ jobs:
               echo "Erro: não conseguiu obter master key da Function App."
               exit 1
             fi
-            # Grava no GITHUB_OUTPUT para uso em próximas steps
             echo "FUNCTION_KEY=$MASTER_KEY" >> $GITHUB_OUTPUT
 
       - name: Construir FUNCTION_URL_FULL
@@ -276,12 +275,6 @@ jobs:
                 containerName="${CONTAINER_NAME}" \
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
-                # Se o template aceitar allowedCorsOrigins como string ou array:
-                # Se o seu web-app.bicep foi ajustado para CORS estático a portal.azure.com, remova este parâmetro.
-                # Caso aceite um array de origens, ajuste conforme necessário:
-                # allowedCorsOrigins='["https://portal.azure.com"]'
-                # Aqui assumimos CORS estático no Bicep, então comentamos:
-                # allowedCorsOrigins='["https://portal.azure.com"]' 
               --only-show-errors
             echo "Web App deployment concluído: $DEPLOY_NAME"
 
