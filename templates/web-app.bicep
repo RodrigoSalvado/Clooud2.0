@@ -13,6 +13,7 @@ param containerRegistryUrl string = ''
 @description('Username para o registry. Se containerRegistryUrl vazio, pode ser deixado em branco.')
 param containerRegistryUsername string = ''
 
+@secure()
 @description('Password para o registry. Se containerRegistryUrl vazio, pode ser deixado em branco.')
 param containerRegistryPassword string = ''
 
@@ -33,7 +34,6 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
-// Web App resource
 resource webApp 'Microsoft.Web/sites@2021-03-01' = {
   name: webAppName
   location: resourceGroup().location
@@ -42,67 +42,60 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     siteConfig: {
-      // Define a imagem de container Docker
-      linuxFxVersion: 'DOCKER|' + imageName
+      // Define a imagem de container Docker usando interpolação de string
+      // Bicep aceita: 'DOCKER|${imageName}'
+      linuxFxVersion: 'DOCKER|${imageName}'
 
       // Always On recomendado para container apps
       alwaysOn: true
 
-      // Desabilita uso de storage compartilhado do App Service (pode ajustar conforme seu cenário; false evita montar storage)
-      appSettings: concat(
-        [
-          // Se sua aplicação usa arquivos locais ou storage, ajuste WEBSITES_ENABLE_APP_SERVICE_STORAGE conforme necessário.
-          // Aqui colocamos false para container sem storage compartilhado; altere para 'true' se precisar montar conteúdo via App Service Storage.
-          {
-            name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
-            value: 'false'
-          }
-          {
-            name: 'STORAGE_ACCOUNT_NAME'
-            value: storageAccountName
-          }
-          {
-            name: 'CONTAINER_NAME'
-            value: containerName
-          }
-          {
-            name: 'CONTAINER_SAS_TOKEN'
-            value: containerSasToken
-          }
-        ],
-        // Se existe credencial de registry privado, adiciona as settings de Docker
-        containerRegistryUrl != '' ? [
-          {
-            name: 'DOCKER_REGISTRY_SERVER_URL'
-            value: containerRegistryUrl
-          }
-          {
-            name: 'DOCKER_REGISTRY_SERVER_USERNAME'
-            value: containerRegistryUsername
-          }
-          {
-            name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
-            value: containerRegistryPassword
-          }
-        ] : [],
+      appSettings: [
+        // Desabilita uso de storage compartilhado do App Service (ajuste se precisar montar storage)
+        {
+          name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
+          value: 'false'
+        }
+        {
+          name: 'STORAGE_ACCOUNT_NAME'
+          value: storageAccountName
+        }
+        {
+          name: 'CONTAINER_NAME'
+          value: containerName
+        }
+        {
+          name: 'CONTAINER_SAS_TOKEN'
+          value: containerSasToken
+        }
+        // Se existir registro privado, adiciona as settings Docker:
+        // Em Bicep, podemos condicionalmente incluir settings, mas a sintaxe de concat com conditionais
+        // fica mais verbosa. Uma forma clara: aqui incluímos sempre, mas deixamos vazios se parâmetros vazios.
+        {
+          name: 'DOCKER_REGISTRY_SERVER_URL'
+          value: containerRegistryUrl
+        }
+        {
+          name: 'DOCKER_REGISTRY_SERVER_USERNAME'
+          value: containerRegistryUsername
+        }
+        {
+          name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
+          value: containerRegistryPassword
+        }
         // Se functionUrl for fornecido, adiciona FUNCTION_URL
-        functionUrl != '' ? [
-          {
-            name: 'FUNCTION_URL'
-            value: functionUrl
-          }
-        ] : []
-      )
+        // Se estiver vazio, ainda será criado, mas vazio. Se preferir não criar a app setting quando vazio,
+        // é possível usar concat e condições, mas simplificamos incluindo-o sempre.
+        {
+          name: 'FUNCTION_URL'
+          value: functionUrl
+        }
+      ]
 
-      // Se precisar de outras configurações (ex: http20Enabled, logs, etc), você pode adicionar aqui.
-      // Exemplo de habilitar HTTP/2:
+      // Habilita HTTP/2
       http20Enabled: true
     }
   }
 }
 
-// (Opcional) Se quiser garantir que existe uma configuração de host name binding ou custom domain, etc, inclua aqui.
-// Por simplicidade, este template apenas cria/atualiza o Web App que referencia um App Service Plan existente e define container.
-
-// Saída opcional: hostName para referência em outros módulos ou scripts
+// Saída opcional, caso queira referenciar em outro módulo
 output defaultHostName string = webApp.properties.defaultHostName
