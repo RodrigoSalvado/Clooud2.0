@@ -183,7 +183,7 @@ jobs:
           inlineScript: |
             RG="${{ env.RG }}"
             # Lista de regiões candidatas que suportam Translator Free (ajuste conforme disponível)
-            REGIONS_CANDIDATAS=("westeurope" "westus2" "eastus" "northeurope")
+            REGIONS_CANDIDATAS=("francecentral" "uksouth" "westeurope" "westus2" "eastus" "northeurope")
             TRANSLATOR_NAME="${{ env.TRANSLATOR_NAME }}"
             SUCESSO=0
 
@@ -362,4 +362,3 @@ jobs:
             fi
 
 
-            
