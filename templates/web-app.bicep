@@ -19,14 +19,18 @@ param containerRegistryPassword string = ''
 param storageAccountName string
 @description('Nome do container na Storage Account.')
 param containerName string
-@description('SAS token para o container.')
-param containerSasToken string
+@description('SAS token para o container (opcional, caso queira usar em separado).')
+param containerSasToken string = ''
+
+@description('URL completo do container com SAS (opcional). Será colocado em APP SETTING CONTAINER_ENDPOINT_SAS.')
+param containerEndpointSas string = ''
 
 @description('URL completa da Function (com chave), para app setting FUNCTION_URL. Se vazio, não adiciona.')
 param functionUrl string = ''
 
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
+var addContainerEndpoint = containerEndpointSas != ''
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
@@ -46,13 +50,14 @@ var baseAppSettings array = [
     name: 'CONTAINER_NAME'
     value: containerName
   }
+  // Mantemos containerSasToken se quiser usar em código ou referência separada
   {
     name: 'CONTAINER_SAS_TOKEN'
     value: containerSasToken
   }
 ]
 
-// 2) settings opcionais
+// 2) settings opcionais para registry privado
 var privateRegistrySettings array = usePrivateRegistry ? [
   {
     name: 'DOCKER_REGISTRY_SERVER_URL'
@@ -68,10 +73,19 @@ var privateRegistrySettings array = usePrivateRegistry ? [
   }
 ] : []
 
+// 3) settings opcionais para FUNCTION_URL
 var functionUrlSettings array = addFunctionUrl ? [
   {
     name: 'FUNCTION_URL'
     value: functionUrl
+  }
+] : []
+
+// 4) settings opcionais para CONTAINER_ENDPOINT_SAS
+var containerEndpointSettings array = addContainerEndpoint ? [
+  {
+    name: 'CONTAINER_ENDPOINT_SAS'
+    value: containerEndpointSas
   }
 ] : []
 
@@ -94,13 +108,16 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
         ]
       }
 
-      // 3) concatena arrays
+      // Concatena todos os arrays de App Settings
       appSettings: concat(
         concat(
-          baseAppSettings,
-          privateRegistrySettings
+          concat(
+            baseAppSettings,
+            privateRegistrySettings
+          ),
+          functionUrlSettings
         ),
-        functionUrlSettings
+        containerEndpointSettings
       )
 
       http20Enabled: true

@@ -154,6 +154,7 @@ jobs:
           inlineScript: |
             ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
             CONTAINER_NAME="${CONTAINER_NAME}"
+            # Gera somente o token SAS para o container
             EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
             sasToken=$(az storage container generate-sas \
               --account-name $ACCOUNT_NAME \
@@ -164,7 +165,18 @@ jobs:
               --auth-mode login \
               --as-user \
               -o tsv)
+
+            # Obter endpoint blob da Storage Account
+            blobEndpoint=$(az storage account show \
+              --name "$ACCOUNT_NAME" \
+              --query "primaryEndpoints.blob" -o tsv)
+            # Remover barra final, se houver
+            blobEndpoint=${blobEndpoint%/}
+
+            # Montar URL completo do container com SAS
+            fullSasUrl="${blobEndpoint}/${CONTAINER_NAME}?${sasToken}"
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
+            echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
 
       # --- Etapas de build e push da imagem Docker antes de criar a Web App ---
       - name: Login Docker Hub
@@ -249,17 +261,17 @@ jobs:
       - name: Construir FUNCTION_URL_FULL
         id: set_function_url
         run: |
-          # Atenção: rota definida no function.json é "route": "search", logo usamos /api/search
+          # Rota definida no function.json: "route": "search"
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
 
       # --- Deploy do Web App com Function URL e CORS fixo para portal.azure.com ---
-      - name: Deploy Web App com Function URL e CORS
+      - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS
         uses: azure/cli@v1
         with:
           inlineScript: |
             DEPLOY_NAME="deploy-webapp-$(date +%s)"
-            echo "Deploy Web App ($WEBAPP_NAME) via Bicep, incluindo FUNCTION_URL e CORS..."
+            echo "Deploy Web App ($WEBAPP_NAME) via Bicep, incluindo FUNCTION_URL e CONTAINER_ENDPOINT_SAS..."
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
@@ -275,6 +287,7 @@ jobs:
                 containerName="${CONTAINER_NAME}" \
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
+                containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
               --only-show-errors
             echo "Web App deployment concluído: $DEPLOY_NAME"
 
@@ -312,6 +325,3 @@ jobs:
             else
               echo "Não encontrou deployment Function App."
             fi
-
-
-            

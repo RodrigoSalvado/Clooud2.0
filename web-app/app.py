@@ -9,15 +9,15 @@ from transformers import pipeline
 from wordcloud import WordCloud, STOPWORDS
 from flask import Flask, render_template, request, flash, redirect, url_for, session
 import re
-from azure.storage.blob import BlobClient, ContainerClient, ContentSettings
+from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient, ContentSettings
 from datetime import datetime
+from urllib.parse import urlparse
 import logging
 
-# Configurar logging
+# Configuração de logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicializa Flask
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 
@@ -25,69 +25,36 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 FUNCTION_URL = os.getenv("FUNCTION_URL")
 CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")
 
-# Validações iniciais de env vars
-if not FUNCTION_URL:
-    logger.error("Env var FUNCTION_URL não está configurada. Defina em App Settings antes de chamar a Function.")
-else:
-    preview = FUNCTION_URL
-    if "?" in FUNCTION_URL:
-        preview = FUNCTION_URL.split("?")[0] + "?..."
-    logger.info(f"FUNCTION_URL configurada: {preview}")
-
-if not CONTAINER_ENDPOINT_SAS or "?" not in CONTAINER_ENDPOINT_SAS:
-    logger.error("Env var CONTAINER_ENDPOINT_SAS ausente ou em formato inválido. Deve ser algo como "
-                 "https://<account>.blob.core.windows.net/<container>?<sas-token>")
-
 # Inicializar pipeline de análise de sentimento
 try:
     classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
     candidate_labels = ["negative", "neutral", "positive"]
     logger.info("Pipeline de sentiment carregado com sucesso.")
 except Exception as e:
-    logger.error("Erro ao carregar pipeline de sentiment.", exc_info=True)
+    logger.error("Falha ao inicializar pipeline de sentimento: %s", e, exc_info=True)
     classifier = None
     candidate_labels = []
 
 def fetch_posts(subreddit, sort, limit):
-    """Chama a Azure Function para buscar posts do Reddit."""
     if not FUNCTION_URL:
-        flash("Serviço de backend não configurado (FUNCTION_URL ausente).", "danger")
+        flash("FUNCTION_URL não está configurado.", "danger")
+        logger.error("FUNCTION_URL ausente")
         return None
-
     try:
-        logger.info(f"fetch_posts: chamando FUNCTION_URL={FUNCTION_URL} com params "
-                    f"subreddit={subreddit}, sort={sort}, limit={limit}")
+        logger.info(f"fetch_posts: chamando FUNCTION_URL={FUNCTION_URL} com params subreddit={subreddit}, sort={sort}, limit={limit}")
         resp = requests.get(
             FUNCTION_URL,
             params={"subreddit": subreddit, "sort": sort, "limit": limit},
             timeout=30
         )
-        logger.info(f"fetch_posts: status_code={resp.status_code}")
-        text_preview = resp.text[:200] + ("..." if len(resp.text) > 200 else "")
-        logger.debug(f"fetch_posts: resposta text preview: {text_preview!r}")
-
-        if resp.status_code == 404:
-            flash(f"Não foi possível encontrar o recurso de backend (404). Verifique configuração.", "warning")
-            return None
+        logger.info(f"fetch_posts: status_code={resp.status_code}, texto_inicio={resp.text[:200]!r}")
         resp.raise_for_status()
         data = resp.json()
         logger.info(f"fetch_posts: JSON recebido com chaves={list(data.keys())}")
-        posts = data.get("posts", data)
-        if posts is None:
-            flash("Backend retornou conteúdo inesperado.", "warning")
-            return None
-        return posts
-    except requests.exceptions.Timeout:
-        logger.error("Timeout ao chamar a Function.", exc_info=True)
-        flash("Tempo de resposta excedido ao chamar o serviço de backend.", "danger")
-        return None
-    except requests.exceptions.RequestException as e:
+        return data.get("posts", data)
+    except Exception as e:
         logger.error(f"Erro ao obter posts: {e}", exc_info=True)
         flash(f"Erro ao obter posts: {e}", "danger")
-        return None
-    except ValueError as e:
-        logger.error(f"Erro ao parsear JSON da resposta: {e}", exc_info=True)
-        flash("Resposta inválida do serviço de backend.", "danger")
         return None
 
 @app.route("/", methods=["GET"])
@@ -102,9 +69,8 @@ def search():
     limit_str = request.args.get("limit", "10").strip()
 
     if not subreddit:
-        flash("Informe um subreddit.", "warning")
+        flash("Informe o nome do subreddit.", "warning")
         return redirect(url_for("home"))
-
     try:
         limit = int(limit_str)
     except ValueError:
@@ -115,8 +81,10 @@ def search():
     if posts is None:
         return redirect(url_for("home"))
 
+    # Armazenar no session para uso posterior
     session["posts"] = posts
     session["search_params"] = {"subreddit": subreddit, "sort": sort, "limit": limit}
+
     return render_template("index.html", posts=posts, subreddit=subreddit, sort=sort, limit=limit)
 
 @app.route("/detail_all", methods=["POST"])
@@ -127,7 +95,7 @@ def detail_all():
         return redirect(url_for("home"))
 
     if classifier is None:
-        flash("Serviço de análise de sentimento indisponível.", "danger")
+        flash("Pipeline de sentimento não está disponível.", "danger")
         return redirect(url_for("home"))
 
     analysed_posts = []
@@ -135,58 +103,65 @@ def detail_all():
     text_accum = []
     neg_probs, neu_probs, pos_probs = [], [], []
 
+    # Analisar cada post
     for post in posts:
-        input_text = post.get('selftext', "").strip() or post.get('title', "")
-        try:
-            sentiment = classifier(input_text, candidate_labels)
-            scores = dict(zip(sentiment['labels'], sentiment['scores']))
-            top_label = sentiment['labels'][0].capitalize()
-            prob_top = int(sentiment['scores'][0] * 100)
-        except Exception as e:
-            logger.error(f"Erro na análise de sentimento para texto: {input_text[:50]!r}", exc_info=True)
-            top_label = "Unknown"
-            prob_top = 0
-            scores = {lbl: 0.0 for lbl in candidate_labels}
-
-        post['sentimento'] = top_label
-        post['probabilidade'] = prob_top
-        post['scores_raw'] = scores
+        # Usar selftext se existir texto, senão o título
+        input_text = post.get('selftext', '').strip() or post.get('title', '').strip()
+        if not input_text:
+            # Sem texto para analisar, pular sentimento
+            post['sentimento'] = 'Unknown'
+            post['probabilidade'] = 0
+            post['scores_raw'] = {}
+        else:
+            try:
+                sentiment = classifier(input_text, candidate_labels)
+                # O zero-shot retorna 'labels' ordenados por score decrescente
+                scores = dict(zip(sentiment['labels'], sentiment['scores']))
+                top_label = sentiment['labels'][0].capitalize()
+                post['sentimento'] = top_label
+                post['probabilidade'] = int(sentiment['scores'][0] * 100)
+                post['scores_raw'] = scores
+                # Acumular para gráficos
+                neg_probs.append(scores.get("negative", 0) * 100)
+                neu_probs.append(scores.get("neutral", 0) * 100)
+                pos_probs.append(scores.get("positive", 0) * 100)
+                text_accum.append(input_text)
+            except Exception as e:
+                logger.error(f"Erro ao analisar sentimento do post '{post.get('title')[:30]}...': {e}", exc_info=True)
+                post['sentimento'] = 'Error'
+                post['probabilidade'] = 0
+                post['scores_raw'] = {}
         analysed_posts.append(post)
 
-        text_accum.append(input_text)
-        neg_probs.append(scores.get("negative", 0) * 100)
-        neu_probs.append(scores.get("neutral", 0) * 100)
-        pos_probs.append(scores.get("positive", 0) * 100)
+    # Inicializar variáveis de caminho de gráfico
+    resumo_chart = None
+    wc_chart = None
 
-    # Gera gráfico de densidade apenas se tivermos >=2 pontos em ao menos um conjunto
-    kde_chart = None
+    # Gerar gráfico de densidade apenas se tivermos pelo menos 2 valores em qualquer série
     try:
-        # Verifica se há múltiplos valores para gerar KDE
-        can_kde = False
-        # Checa cada lista: precisa de pelo menos 2 valores distintos ou 2 elementos?
-        if len(neg_probs) > 1:
-            can_kde = True
-        if len(neu_probs) > 1:
-            can_kde = True
-        if len(pos_probs) > 1:
-            can_kde = True
-
-        if can_kde:
+        # Verificar se temos dados suficientes: ao menos 2 valores em algum array
+        # Aqui podemos exigir pelo menos 2 elementos em TOTAL: se apenas 1 post, pulamos.
+        total_values = neg_probs + neu_probs + pos_probs
+        if len(total_values) < 2:
+            logger.info("Dados insuficientes para KDE (menos de 2 elementos no total). Pulando geração de densidade.")
+        else:
+            # Preparar KDE apenas se série tiver >1 elemento
             x = np.linspace(0, 100, 500)
             plt.figure(figsize=(8, 4))
             plotted = False
-            # Negative
+
             if len(neg_probs) > 1 and any(neg_probs):
                 try:
                     kde_neg = gaussian_kde(neg_probs)
                     y_neg = kde_neg(x)
+                    # Normalizar somando
                     y_neg = y_neg / y_neg.sum() * 100
                     plt.plot(x, y_neg, label="Negative", linewidth=2)
                     plt.fill_between(x, y_neg, alpha=0.2)
                     plotted = True
                 except Exception as e:
-                    logger.warning("Não foi possível gerar KDE para negative.", exc_info=True)
-            # Neutral
+                    logger.warning("Falha ao gerar KDE para negativos: %s", e)
+
             if len(neu_probs) > 1 and any(neu_probs):
                 try:
                     kde_neu = gaussian_kde(neu_probs)
@@ -196,8 +171,8 @@ def detail_all():
                     plt.fill_between(x, y_neu, alpha=0.2)
                     plotted = True
                 except Exception as e:
-                    logger.warning("Não foi possível gerar KDE para neutral.", exc_info=True)
-            # Positive
+                    logger.warning("Falha ao gerar KDE para neutros: %s", e)
+
             if len(pos_probs) > 1 and any(pos_probs):
                 try:
                     kde_pos = gaussian_kde(pos_probs)
@@ -207,7 +182,7 @@ def detail_all():
                     plt.fill_between(x, y_pos, alpha=0.2)
                     plotted = True
                 except Exception as e:
-                    logger.warning("Não foi possível gerar KDE para positive.", exc_info=True)
+                    logger.warning("Falha ao gerar KDE para positivos: %s", e)
 
             if plotted:
                 plt.xlabel("Confiança da Análise (%)")
@@ -215,24 +190,27 @@ def detail_all():
                 plt.title("Distribuição e Densidade de Confiança por Sentimento")
                 plt.legend()
                 plt.tight_layout()
-                kde_chart = "static/distribuicao_confianca.png"
-                plt.savefig(kde_chart, dpi=200)
-                plt.close()
+                resumo_chart = "static/distribuicao_confianca.png"
+                plt.savefig(resumo_chart, dpi=200)
             else:
-                logger.info("Nenhum KDE plotado: dados insuficientes ou todos zero.")
-                kde_chart = None
-        else:
-            logger.info("Dados insuficientes para KDE (menos de 2 elementos em cada série). Pulando geração de densidade.")
+                logger.info("Nenhuma série de probabilidades adequada para plotar KDE. Pulando.")
+            plt.close()
     except Exception as e:
-        logger.error("Erro ao gerar gráfico de densidade.", exc_info=True)
-        kde_chart = None
+        logger.error("Erro ao gerar gráfico de densidade: %s", e, exc_info=True)
 
-    # Gera wordcloud
-    wc_chart = None
+    # Gerar nuvem de palavras apenas se houver pelo menos 1 palavra
     try:
-        if text_accum:
+        # Concatenar textos
+        full_text = " ".join(text_accum).strip()
+        # Extrair palavras: basta verificar se há algo após split
+        words = re.findall(r"\w+", full_text)
+        # Filtrar stopwords manualmente: contagem mínima
+        filtered_words = [w for w in words if w.lower() not in STOPWORDS]
+        if not filtered_words:
+            logger.info("Dados insuficientes para WordCloud (nenhuma palavra após filtro). Pulando geração de nuvem.")
+        else:
             wordcloud = WordCloud(width=700, height=350, background_color="white",
-                                  stopwords=set(STOPWORDS)).generate(" ".join(text_accum))
+                                  stopwords=set(STOPWORDS)).generate(" ".join(filtered_words))
             plt.figure(figsize=(7, 3.5))
             plt.imshow(wordcloud, interpolation="bilinear")
             plt.axis("off")
@@ -240,17 +218,16 @@ def detail_all():
             wc_chart = "static/nuvem_palavras_all.png"
             plt.savefig(wc_chart, dpi=200)
             plt.close()
-        else:
-            logger.info("Nenhum texto para WordCloud.")
     except Exception as e:
-        logger.error("Erro ao gerar wordcloud.", exc_info=True)
-        wc_chart = None
+        logger.error("Erro ao gerar wordcloud: %s", e, exc_info=True)
 
-    return render_template("detail_all.html", posts=analysed_posts,
-                           resumo_chart=kde_chart,
-                           wc_chart=wc_chart,
-                           # gantt_chart era redundante, podemos reutilizar resumo_chart ou outro
-                           gantt_chart=kde_chart)
+    # Renderizar template passando os paths ou None
+    return render_template(
+        "detail_all.html",
+        posts=analysed_posts,
+        resumo_chart=resumo_chart,
+        wc_chart=wc_chart
+    )
 
 @app.route("/gerar_relatorio", methods=["POST"])
 def gerar_relatorio():
@@ -259,87 +236,79 @@ def gerar_relatorio():
         flash("Não há dados disponíveis para gerar relatório.", "warning")
         return redirect(url_for("home"))
 
-    if not CONTAINER_ENDPOINT_SAS or "?" not in CONTAINER_ENDPOINT_SAS:
+    if not CONTAINER_ENDPOINT_SAS:
         logger.error("CONTAINER_ENDPOINT_SAS inválido ou ausente no gerar_relatorio.")
-        flash("Configuração de Blob SAS inválida.", "danger")
+        flash("CONTAINER_ENDPOINT_SAS inválido ou ausente.", "danger")
         return redirect(url_for("home"))
 
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
     df = pd.DataFrame(posts)
     local_csv_name = f"relatorio_{timestamp}.csv"
+    df.to_csv(local_csv_name, index=False, encoding="utf-8")
+
+    # Enviar o CSV e gráficos gerados se existirem no container
     try:
-        df.to_csv(local_csv_name, index=False, encoding="utf-8")
-    except Exception as e:
-        logger.error("Erro ao salvar CSV localmente.", exc_info=True)
-        flash("Erro ao criar relatório local.", "danger")
-        return redirect(url_for("home"))
-
-    charts = {}
-    possible_kde = "static/distribuicao_confianca.png"
-    possible_wc = "static/nuvem_palavras_all.png"
-    if os.path.isfile(possible_kde):
-        charts[f"distribuicao_confianca_{timestamp}.png"] = possible_kde
-    if os.path.isfile(possible_wc):
-        charts[f"nuvem_palavras_all_{timestamp}.png"] = possible_wc
-
-    try:
-        sas_url_base = CONTAINER_ENDPOINT_SAS.split('?')[0]
-        sas_token = CONTAINER_ENDPOINT_SAS.split('?')[1]
-
+        # Separar base e token
+        parts = CONTAINER_ENDPOINT_SAS.split('?', 1)
+        if len(parts) != 2:
+            raise ValueError("Formato inválido de CONTAINER_ENDPOINT_SAS")
+        sas_url_base, sas_token = parts
         # Upload CSV
         blob_url = f"{sas_url_base}/{local_csv_name}?{sas_token}"
-        logger.info(f"Upload CSV para blob: {blob_url}")
         blob_client = BlobClient.from_blob_url(blob_url)
         with open(local_csv_name, "rb") as data:
             blob_client.upload_blob(data, overwrite=True, content_settings=ContentSettings(
                 content_type="text/csv",
                 content_disposition="inline"
             ))
-
-        # Upload charts, se existirem
-        for filename, local_path in charts.items():
-            blob_chart_url = f"{sas_url_base}/{filename}?{sas_token}"
-            logger.info(f"Upload chart para blob: {blob_chart_url}")
-            chart_client = BlobClient.from_blob_url(blob_chart_url)
-            with open(local_path, "rb") as chart_file:
-                chart_client.upload_blob(chart_file, overwrite=True, content_settings=ContentSettings(
-                    content_type="image/png",
-                    content_disposition="inline"
-                ))
-
+        # Upload de gráficos, se existirem
+        candidatos = [
+            ("static/distribuicao_confianca.png", f"distribuicao_confianca_{timestamp}.png"),
+            ("static/nuvem_palavras_all.png", f"nuvem_palavras_all_{timestamp}.png")
+        ]
+        for local_path, target_name in candidatos:
+            if os.path.exists(local_path):
+                chart_url = f"{sas_url_base}/{target_name}?{sas_token}"
+                chart_client = BlobClient.from_blob_url(chart_url)
+                with open(local_path, "rb") as chart_file:
+                    # Determinar content_type a partir da extensão
+                    chart_client.upload_blob(chart_file, overwrite=True, content_settings=ContentSettings(
+                        content_type="image/png",
+                        content_disposition="inline"
+                    ))
         flash("Relatório e gráficos enviados com sucesso.", "success")
     except Exception as e:
-        logger.error("Erro ao enviar para Azure Blob Storage.", exc_info=True)
-        flash("Erro ao enviar para Azure Blob Storage.", "danger")
+        logger.error("Erro ao enviar para Azure Blob Storage: %s", e, exc_info=True)
+        flash(f"Erro ao enviar para Azure Blob Storage: {e}", "danger")
 
     return redirect(url_for("home"))
 
 @app.route("/listar_ficheiros", methods=["GET"])
 def listar_ficheiros():
-    if not CONTAINER_ENDPOINT_SAS or "?" not in CONTAINER_ENDPOINT_SAS:
-        logger.error("CONTAINER_ENDPOINT_SAS inválido ou ausente no listar_ficheiros.")
-        flash("Configuração de Blob SAS inválida.", "danger")
+    if not CONTAINER_ENDPOINT_SAS:
+        flash("CONTAINER_ENDPOINT_SAS inválido ou ausente.", "danger")
         return redirect(url_for("home"))
-
     try:
-        sas_url = CONTAINER_ENDPOINT_SAS
-        container_client = ContainerClient.from_container_url(sas_url)
+        container_client = ContainerClient.from_container_url(CONTAINER_ENDPOINT_SAS)
         blobs = list(container_client.list_blobs())
-        logger.info(f"Encontrados {len(blobs)} blobs no container.")
-
-        ficheiros = [blob.name for blob in blobs]
+        # Ordenar por timestamp extraído do nome, se houver padrã
+        def extrai_ts(nome):
+            m = re.search(r'_(\d{8}_\d{6})', nome)
+            return m.group(1) if m else ""
         ficheiros = sorted(
-            ficheiros,
-            key=lambda name: re.search(r'_(\d{8}_\d{6})', name).group(1) if re.search(r'_(\d{8}_\d{6})', name) else '',
+            [blob.name for blob in blobs],
+            key=lambda name: extrai_ts(name),
             reverse=True
         )
-        sas_base = sas_url.split('?')[0]
-        sas_token = sas_url.split('?')[1]
+        sas_parts = CONTAINER_ENDPOINT_SAS.split('?', 1)
+        sas_base = sas_parts[0]
+        sas_token = sas_parts[1] if len(sas_parts) > 1 else ""
         return render_template("ficheiros.html", ficheiros=ficheiros, sas_base=sas_base, sas_token=sas_token)
     except Exception as e:
-        logger.error("Erro ao listar ficheiros no Blob Storage.", exc_info=True)
-        flash("Erro ao listar ficheiros: verifique configuração de Blob SAS.", "danger")
+        logger.error("Erro ao listar ficheiros: %s", e, exc_info=True)
+        flash(f"Erro ao listar ficheiros: {e}", "danger")
         return redirect(url_for("home"))
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    # Em produção, substitua app.run por servidor WSGI adequado
+    app.run(host="0.0.0.0", port=5000)
