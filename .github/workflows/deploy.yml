@@ -248,17 +248,26 @@ jobs:
           fi
           # Verifica existência de host.json e requirements.txt
           if [ ! -f "${AZURE_FUNCTIONAPP_PACKAGE_PATH}/host.json" ]; then
-            echo "Aviso: não encontrei host.json em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+            echo "ERRO: não encontrei host.json em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+            exit 1
           fi
           if [ ! -f "${AZURE_FUNCTIONAPP_PACKAGE_PATH}/requirements.txt" ]; then
-            echo "Aviso: não encontrei requirements.txt em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+            echo "ERRO: não encontrei requirements.txt em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+            exit 1
           fi
 
       - name: Empacotar código da Function App para Zip Deploy
         run: |
           echo "A empacotar código da Function App..."
           cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-          # Gera zip com todo o conteúdo da pasta (host.json, pastas de funções, etc.)
+
+          # Fallback: instalar dependências localmente e vendorizá-las, caso build remoto falhe
+          echo "Vendorizando dependências localmente..."
+          mkdir -p .python_packages/lib/site-packages
+          pip install --upgrade pip
+          pip install -r requirements.txt --target .python_packages/lib/site-packages
+
+          # Gera zip com todo o conteúdo da pasta (host.json, pastas de funções, dependências vendorizadas, etc.)
           zip -r ../funcapp.zip .
           ls -lh ../funcapp.zip
 
@@ -273,7 +282,7 @@ jobs:
               --src "$GITHUB_WORKSPACE/funcapp.zip"
             echo "Zip Deploy concluído."
 
-      # Poderias manter como alternativa o func azure functionapp publish, mas Zip Deploy com SCM_DO_BUILD_DURING_DEPLOYMENT=true já instala deps.
+      # Poderias manter como alternativa o func azure functionapp publish, mas Zip Deploy com SCM_DO_BUILD_DURING_DEPLOYMENT=true geralmente instala deps.
       # Se quiseres usar func Core Tools, inclui algo assim:
       # - name: Publicar Azure Function App com Remote Build (verbose)
       #   env:
