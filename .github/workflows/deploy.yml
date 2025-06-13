@@ -22,7 +22,7 @@ jobs:
       TARGET_LOCATION: 'francecentral'
       WEBAPP_NAME: 'minhaapp-rodrig0salv'
       AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
-      # Nome fixo (ou adaptável) para o Translator; ajuste se precisar:
+      # Nome fixo para o Translator; embora vá tentar em regiões compatíveis
       TRANSLATOR_NAME: 'translator-func-rodrig0salv'
       # Se usar plano existente, defina em secrets ou variável:
       # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
@@ -47,6 +47,7 @@ jobs:
 
       - name: (Re)Criar Resource Group em francecentral
         run: |
+          # Verifica se RG existe; se existir em outra região, recria em TARGET_LOCATION
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
             echo "Criando RG '$RG' em $TARGET_LOCATION..."
@@ -149,100 +150,19 @@ jobs:
               --only-show-errors
             echo "App Service Plan deploy concluído: $DEPLOY_NAME"
 
-      - name: Gerar SAS token Storage (opcional)
-        id: gen_sas
+      - name: Deploy Function App em Python via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
-            ACCOUNT_NAME="miniprojetostorage20"
-            CONTAINER_NAME="reddit-posts"
-            EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
-            sasToken=$(az storage container generate-sas \
-              --account-name $ACCOUNT_NAME \
-              --name $CONTAINER_NAME \
-              --permissions racld \
-              --expiry $EXPIRY \
-              --https-only \
-              --auth-mode login \
-              --as-user \
-              -o tsv)
-            echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
-
-      - name: Criar Translator Free
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            # Usa TRANSLATOR_NAME fixo definido em env
-            echo "Criando ou garantindo Translator '${TRANSLATOR_NAME}' em SKU Free..."
-            # Já garantimos RG criado acima
-            if az cognitiveservices account show --name "$TRANSLATOR_NAME" --resource-group "$RG" &>/dev/null; then
-              echo "Translator $TRANSLATOR_NAME já existe em RG $RG."
-            else
-              az cognitiveservices account create \
-                --name "$TRANSLATOR_NAME" \
-                --resource-group "$RG" \
-                --kind Translator \
-                --sku F0 \
-                --location "$TARGET_LOCATION" \
-                --yes
-              echo "Translator criado: $TRANSLATOR_NAME"
-            fi
-
-            # Obter endpoint e key do Translator
-            echo "Obtendo endpoint e chave do Translator '$TRANSLATOR_NAME'..."
-            ENDPOINT=$(az cognitiveservices account show \
-              --name "$TRANSLATOR_NAME" \
-              --resource-group "$RG" \
-              --query "properties.endpoint" -o tsv)
-            KEY=$(az cognitiveservices account keys list \
-              --name "$TRANSLATOR_NAME" \
-              --resource-group "$RG" \
-              --query "key1" -o tsv)
-            echo "TRANSLATOR_ENDPOINT=$ENDPOINT" >> $GITHUB_ENV
-            echo "TRANSLATOR_KEY=$KEY" >> $GITHUB_ENV
-            echo "Endpoint do Translator: $ENDPOINT"
-            # Opcional: também configurar na Web App caso queira:
-            az webapp config appsettings set \
-              --resource-group "$RG" \
-              --name "$WEBAPP_NAME" \
-              --settings TRANSLATOR_ENDPOINT="$ENDPOINT" TRANSLATOR_KEY="$KEY"
-            echo "App Settings TRANSLATOR_ENDPOINT/TRANSLATOR_KEY atualizados na Web App '$WEBAPP_NAME'."
-
-      - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            DEPLOY_NAME="deploy-webapp-$(date +%s)"
-            echo "Deploy Web App ($WEBAPP_NAME) sem App Insights..."
+            DEPLOY_NAME="deploy-funcapp-$(date +%s)"
+            echo "Deploy Function App ($FUNCTIONAPP_NAME) via Bicep..."
             az deployment group create \
               --name "$DEPLOY_NAME" \
-              --resource-group "$RG" \
-              --template-file templates/web-app.bicep \
-              --parameters \
-                webAppName="$WEBAPP_NAME" \
-                planName="ASP-MiniProjetoCloud2.0" \
-                imageName="rodrig0salv/minha-app:latest" \
-                containerRegistryUrl='' \
-                containerRegistryUsername='' \
-                containerRegistryPassword='' \
-                storageAccountName="miniprojetostorage20" \
-                containerName="reddit-posts" \
-                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
-              --only-show-errors
-            echo "Web App deploy concluído: $DEPLOY_NAME"
-
-      - name: Deploy Function App em Python (Bicep com parâmetros)
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            echo "Deploy Function App ($FUNCTIONAPP_NAME) via Bicep..."
-            # Passa translatorEndpoint e translatorKey nos parâmetros de Bicep (se o template aceitar)
-            az deployment group create \
-              --name "deploy-funcapp-$(date +%s)" \
               --resource-group "$RG" \
               --template-file templates/function-app.bicep \
               --parameters \
                 functionAppName="$FUNCTIONAPP_NAME" \
+                # Se o seu template Bicep usar planName ou existingPlanResourceId, ajuste conforme template:
                 planName="ASP-MiniProjetoCloud2.0" \
                 storageAccountName="miniprojetostorage20" \
                 cosmosAccountName="cosmosdbminiprojeto" \
@@ -252,14 +172,91 @@ jobs:
                 redditPassword="miniprojetocloud" \
                 secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" \
                 clientIdValue="bzG6zHjC23GSenSIXe0M-Q" \
-                translatorEndpoint="${{ env.TRANSLATOR_ENDPOINT }}" \
-                translatorKey="${{ env.TRANSLATOR_KEY }}" \
+                translatorEndpoint="" \
+                translatorKey="" \
               --only-show-errors
-            echo "Function App deployment concluído."
+            echo "Function App deployment concluído: $DEPLOY_NAME"
+
+      - name: Criar Translator Free em região suportada e configurar App Settings na Function App
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            RG="${{ env.RG }}"
+            # Lista de regiões candidatas que suportam Translator Free (ajuste conforme disponível)
+            REGIONS_CANDIDATAS=("westeurope" "westus2" "eastus" "northeurope")
+            TRANSLATOR_NAME="${{ env.TRANSLATOR_NAME }}"
+            SUCESSO=0
+
+            # Garante RG existe
+            if ! az group show --name "$RG" &>/dev/null; then
+              echo "Resource Group $RG não existe, criando em ${REGIONS_CANDIDATAS[0]}..."
+              az group create --name "$RG" --location "${REGIONS_CANDIDATAS[0]}"
+            fi
+
+            echo "Tentando criar Translator Free (F0) em regiões candidatas..."
+            for REGION in "${REGIONS_CANDIDATAS[@]}"; do
+              echo "- Tentando região $REGION..."
+              # Verifica se já existe com esse nome
+              if az cognitiveservices account show --name "$TRANSLATOR_NAME" --resource-group "$RG" &>/dev/null; then
+                echo "Translator '$TRANSLATOR_NAME' já existe em RG '$RG'. Pulando criação."
+                SUCESSO=1
+                break
+              fi
+
+              # Tenta criar
+              set +e
+              az cognitiveservices account create \
+                --name "$TRANSLATOR_NAME" \
+                --resource-group "$RG" \
+                --kind Translator \
+                --sku F0 \
+                --location "$REGION" \
+                --yes &> /tmp/translator_create.log
+              STATUS=$?
+              set -e
+              if [ $STATUS -eq 0 ]; then
+                echo "Criado Translator '$TRANSLATOR_NAME' em $REGION."
+                SUCESSO=1
+                break
+              else
+                echo "Falha ao criar Translator em $REGION. Log inicial:"
+                sed -n '1,5p' /tmp/translator_create.log
+                echo "Tentando próxima região..."
+              fi
+            done
+
+            if [ $SUCESSO -ne 1 ]; then
+              echo "Erro: não conseguiu criar Translator Free em nenhuma região candidata."
+              exit 1
+            fi
+
+            # Obter endpoint e chave
+            echo "Obtendo endpoint e chave do Translator '$TRANSLATOR_NAME'..."
+            ENDPOINT=$(az cognitiveservices account show \
+              --name "$TRANSLATOR_NAME" \
+              --resource-group "$RG" \
+              --query "properties.endpoint" -o tsv)
+            KEY=$(az cognitiveservices account keys list \
+              --name "$TRANSLATOR_NAME" \
+              --resource-group "$RG" \
+              --query "key1" -o tsv)
+            if [ -z "$ENDPOINT" ] || [ -z "$KEY" ]; then
+              echo "Erro: não foi possível obter endpoint ou chave do Translator."
+              exit 1
+            fi
+            echo "Endpoint do Translator: $ENDPOINT"
+
+            # Atualiza App Settings da Function App
+            echo "Configurando App Settings TRANSLATOR_ENDPOINT e TRANSLATOR_KEY na Function App '$FUNCTIONAPP_NAME'..."
+            az functionapp config appsettings set \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --settings TRANSLATOR_ENDPOINT="$ENDPOINT" TRANSLATOR_KEY="$KEY"
+            echo "App Settings do Translator atualizados na Function App."
 
       - name: Instalar Azure Functions Core Tools
         run: |
-          # Executado no runner Ubuntu, não no container azure-cli
+          # Executado no runner Ubuntu
           if ! command -v npm &>/dev/null; then
             sudo apt-get update
             sudo apt-get install -y nodejs npm
@@ -285,45 +282,55 @@ jobs:
           RG: ${{ env.RG }}
           FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
           AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc"
-          TRANSLATOR_ENDPOINT: ${{ env.TRANSLATOR_ENDPOINT }}
-          TRANSLATOR_KEY: ${{ env.TRANSLATOR_KEY }}
         run: |
           cd "$AZURE_FUNCTIONAPP_PACKAGE_PATH"
           echo "Publicando Function App '$FUNCTIONAPP_NAME' em RG '$RG'..."
-          # O Remote Build provisiona as dependências conforme requirements.txt
           func azure functionapp publish "$FUNCTIONAPP_NAME" --python
 
-      - name: Obter master key da Function App e atualizar Web App
-        env:
-          RG: ${{ env.RG }}
-          FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
-          WEBAPP_NAME: ${{ env.WEBAPP_NAME }}
-          TRANSLATOR_ENDPOINT: ${{ env.TRANSLATOR_ENDPOINT }}
-          TRANSLATOR_KEY: ${{ env.TRANSLATOR_KEY }}
-        run: |
-          echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
-          MASTER_KEY=$(az functionapp keys list \
-            --resource-group "$RG" \
-            --name "$FUNCTIONAPP_NAME" \
-            --query "masterKey" -o tsv)
-          if [ -z "$MASTER_KEY" ]; then
-            echo "Erro: não conseguiu obter master key da Function App. Abortando atualização de FUNCTION_URL."
-            exit 1
-          fi
-          FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/SearchFunction?code=${MASTER_KEY}"
-          echo "FUNCTION_URL completa (com master key): $FUNCTION_URL_FULL"
-          # Atualiza Web App
-          az webapp config appsettings set \
-            --resource-group "$RG" \
-            --name "$WEBAPP_NAME" \
-            --settings FUNCTION_URL="$FUNCTION_URL_FULL"
-          echo "App Setting FUNCTION_URL atualizado na Web App '$WEBAPP_NAME'."
-          # Atualiza Function App para incluir as variáveis do Translator
-          az functionapp config appsettings set \
-            --resource-group "$RG" \
-            --name "$FUNCTIONAPP_NAME" \
-            --settings TRANSLATOR_ENDPOINT="$TRANSLATOR_ENDPOINT" TRANSLATOR_KEY="$TRANSLATOR_KEY"
-          echo "App Settings TRANSLATOR_ENDPOINT/TRANSLATOR_KEY atualizados na Function App '$FUNCTIONAPP_NAME'."
+      - name: Deploy Web App via Bicep
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            DEPLOY_NAME="deploy-webapp-$(date +%s)"
+            echo "Deploy/WebApp via Bicep ($WEBAPP_NAME)..."
+            az deployment group create \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
+              --template-file templates/web-app.bicep \
+              --parameters \
+                webAppName="$WEBAPP_NAME" \
+                planName="ASP-MiniProjetoCloud2.0" \
+                imageName="rodrig0salv/minha-app:latest" \
+                containerRegistryUrl='' \
+                containerRegistryUsername='' \
+                containerRegistryPassword='' \
+                storageAccountName="miniprojetostorage20" \
+                containerName="reddit-posts" \
+                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
+              --only-show-errors
+            echo "Web App deployment concluído: $DEPLOY_NAME"
+
+      - name: Obter master key da Function App e atualizar App Setting FUNCTION_URL na Web App
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
+            MASTER_KEY=$(az functionapp keys list \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --query "masterKey" -o tsv)
+            if [ -z "$MASTER_KEY" ]; then
+              echo "Erro: não conseguiu obter master key da Function App. Abortando atualização de FUNCTION_URL."
+              exit 1
+            fi
+            FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/SearchFunction?code=${MASTER_KEY}"
+            echo "FUNCTION_URL completa (com master key): $FUNCTION_URL_FULL"
+            echo "Atualizando App Setting FUNCTION_URL na Web App '$WEBAPP_NAME'..."
+            az webapp config appsettings set \
+              --resource-group "$RG" \
+              --name "$WEBAPP_NAME" \
+              --settings FUNCTION_URL="$FUNCTION_URL_FULL"
+            echo "App Setting FUNCTION_URL atualizado na Web App."
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
@@ -333,13 +340,12 @@ jobs:
             az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME"
             echo "Reiniciando Function App '$FUNCTIONAPP_NAME'..."
             az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME"
-            echo "Reiniciado."
+            echo "Ambos reiniciados."
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1
         with:
           inlineScript: |
-            # Web App outputs
             DEPLOY_WEB_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-webapp-')]|[0].name" -o tsv)
             if [ -n "$DEPLOY_WEB_NAME" ]; then
               echo "Deployment Web App: $DEPLOY_WEB_NAME"
@@ -347,7 +353,6 @@ jobs:
             else
               echo "Não encontrou deployment Web App."
             fi
-            # Function App outputs
             DEPLOY_FUNC_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-funcapp-')]|[0].name" -o tsv)
             if [ -n "$DEPLOY_FUNC_NAME" ]; then
               echo "Deployment Function App: $DEPLOY_FUNC_NAME"
