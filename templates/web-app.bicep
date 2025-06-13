@@ -19,24 +19,26 @@ param containerRegistryPassword string = ''
 param storageAccountName string
 @description('Nome do container na Storage Account.')
 param containerName string
-@description('SAS token para o container (opcional, caso queira usar em separado).')
+
+@description('SAS token para o container (opcional). Se vazio, não será adicionado como APP SETTING.')
 param containerSasToken string = ''
 
-@description('URL completo do container com SAS (opcional). Será colocado em APP SETTING CONTAINER_ENDPOINT_SAS.')
+@description('URL completo do container com SAS (opcional). Será colocado em APP SETTING CONTAINER_ENDPOINT_SAS se não vazio.')
 param containerEndpointSas string = ''
 
-@description('URL completa da Function (com chave), para app setting FUNCTION_URL. Se vazio, não adiciona.')
+@description('URL completa da Function (com chave) para app setting FUNCTION_URL. Se vazio, não adiciona.')
 param functionUrl string = ''
 
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
+var addContainerSas = containerSasToken != ''
 var addContainerEndpoint = containerEndpointSas != ''
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
-// 1) baseAppSettings como array explicitamente
+// 1) Configurações básicas sempre incluídas
 var baseAppSettings array = [
   {
     name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
@@ -50,14 +52,25 @@ var baseAppSettings array = [
     name: 'CONTAINER_NAME'
     value: containerName
   }
-  // Mantemos containerSasToken se quiser usar em código ou referência separada
+]
+
+// 2) Se fornecido SAS token isolado, adiciona CONTAINER_SAS_TOKEN
+var containerSasSettings array = addContainerSas ? [
   {
     name: 'CONTAINER_SAS_TOKEN'
     value: containerSasToken
   }
-]
+] : []
 
-// 2) settings opcionais para registry privado
+// 3) Se fornecido endpoint completo com SAS, adiciona CONTAINER_ENDPOINT_SAS
+var containerEndpointSettings array = addContainerEndpoint ? [
+  {
+    name: 'CONTAINER_ENDPOINT_SAS'
+    value: containerEndpointSas
+  }
+] : []
+
+// 4) Configurações de registry privado, se aplicável
 var privateRegistrySettings array = usePrivateRegistry ? [
   {
     name: 'DOCKER_REGISTRY_SERVER_URL'
@@ -73,19 +86,11 @@ var privateRegistrySettings array = usePrivateRegistry ? [
   }
 ] : []
 
-// 3) settings opcionais para FUNCTION_URL
+// 5) Configuração de FUNCTION_URL, se aplicável
 var functionUrlSettings array = addFunctionUrl ? [
   {
     name: 'FUNCTION_URL'
     value: functionUrl
-  }
-] : []
-
-// 4) settings opcionais para CONTAINER_ENDPOINT_SAS
-var containerEndpointSettings array = addContainerEndpoint ? [
-  {
-    name: 'CONTAINER_ENDPOINT_SAS'
-    value: containerEndpointSas
   }
 ] : []
 
@@ -97,7 +102,7 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     siteConfig: {
-      // Container image
+      // Imagem de container
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
 
@@ -108,16 +113,19 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
         ]
       }
 
-      // Concatena todos os arrays de App Settings
+      // Concatena todos os arrays de App Settings, só inclui blocos não vazios
       appSettings: concat(
         concat(
           concat(
-            baseAppSettings,
-            privateRegistrySettings
+            concat(
+              baseAppSettings,
+              containerSasSettings
+            ),
+            containerEndpointSettings
           ),
-          functionUrlSettings
+          privateRegistrySettings
         ),
-        containerEndpointSettings
+        functionUrlSettings
       )
 
       http20Enabled: true

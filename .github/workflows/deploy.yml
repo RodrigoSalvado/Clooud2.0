@@ -89,11 +89,7 @@ jobs:
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/storage-account.bicep \
-              --parameters \
-                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
-                containerName="${CONTAINER_NAME}" \
-                enableBlobVersioning=true \
-                blobSoftDeleteDays=7 \
+              --parameters storageAccountName="${STORAGE_ACCOUNT_NAME}" containerName="${CONTAINER_NAME}" enableBlobVersioning=true blobSoftDeleteDays=7 \
               --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
@@ -116,13 +112,7 @@ jobs:
                 --name "$DEPLOY_NAME" \
                 --resource-group "$RG" \
                 --template-file templates/cosmosdb.bicep \
-                --parameters \
-                  cosmosAccountName="$ACCOUNT_NAME" \
-                  cosmosLocation="$TARGET_LOCATION" \
-                  cosmosDatabaseName='RedditApp' \
-                  cosmosContainerName='posts' \
-                  cosmosPartitionKeyPath='/id' \
-                  cosmosThroughput=${COSMOS_THROUGHPUT} \
+                --parameters cosmosAccountName="$ACCOUNT_NAME" cosmosLocation="$TARGET_LOCATION" cosmosDatabaseName='RedditApp' cosmosContainerName='posts' cosmosPartitionKeyPath='/id' cosmosThroughput=${COSMOS_THROUGHPUT} \
                 --only-show-errors
               echo "Deploy Cosmos concluído: $DEPLOY_NAME"
             fi
@@ -137,13 +127,7 @@ jobs:
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/app-service-plan.bicep \
-              --parameters \
-                planName='ASP-MiniProjetoCloud2.0' \
-                skuTier='Basic' \
-                skuName='B2' \
-                capacity=1 \
-                isLinux=true \
-                location="$TARGET_LOCATION" \
+              --parameters planName='ASP-MiniProjetoCloud2.0' skuTier='Basic' skuName='B2' capacity=1 isLinux=true location="$TARGET_LOCATION" \
               --only-show-errors
             echo "App Service Plan deploy concluído: $DEPLOY_NAME"
 
@@ -154,13 +138,13 @@ jobs:
           inlineScript: |
             ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
             CONTAINER_NAME="${CONTAINER_NAME}"
-            # Gera token SAS com permissão de escrita (w) e delete (d) para overwrite:
+            # Gera token SAS com permissão de leitura, escrita e delete (para overwrite se necessário)
             EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
             sasToken=$(az storage container generate-sas \
-              --account-name $ACCOUNT_NAME \
-              --name $CONTAINER_NAME \
+              --account-name "$ACCOUNT_NAME" \
+              --name "$CONTAINER_NAME" \
               --permissions raclwd \
-              --expiry $EXPIRY \
+              --expiry "$EXPIRY" \
               --https-only \
               --auth-mode login \
               --as-user \
@@ -177,7 +161,6 @@ jobs:
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
             echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
 
-      # --- Etapas de build e push da imagem Docker antes de criar a Web App ---
       - name: Login Docker Hub
         uses: docker/login-action@v2
         with:
@@ -194,7 +177,6 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      # --- Deploy da Function App via Bicep (para criar/inicializar recurso, caso ainda não exista) ---
       - name: Deploy Function App via Bicep (template)
         uses: azure/cli@v1
         with:
@@ -204,19 +186,7 @@ jobs:
               --name "deploy-funcapp-$(date +%s)" \
               --resource-group "$RG" \
               --template-file templates/function-app.bicep \
-              --parameters \
-                functionAppName="$FUNCTIONAPP_NAME" \
-                planName="ASP-MiniProjetoCloud2.0" \
-                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
-                cosmosAccountName="cosmosdbminiprojeto" \
-                cosmosDatabaseName="RedditApp" \
-                cosmosContainerName="posts" \
-                redditUser="Major-Noise-6411" \
-                redditPassword="miniprojetocloud" \
-                secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" \
-                clientIdValue="bzG6zHjC23GSenSIXe0M-Q" \
-                translatorEndpoint="" \
-                translatorKey="" \
+              --parameters functionAppName="$FUNCTIONAPP_NAME" planName="ASP-MiniProjetoCloud2.0" storageAccountName="${STORAGE_ACCOUNT_NAME}" cosmosAccountName="cosmosdbminiprojeto" cosmosDatabaseName="RedditApp" cosmosContainerName="posts" redditUser="Major-Noise-6411" redditPassword="miniprojetocloud" secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" clientIdValue="bzG6zHjC23GSenSIXe0M-Q" translatorEndpoint="" translatorKey="" \
               --only-show-errors
             echo "Function App deployment via Bicep concluído."
 
@@ -238,7 +208,8 @@ jobs:
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
-              --src "$GITHUB_WORKSPACE/funcapp.zip"
+              --src "$GITHUB_WORKSPACE/funcapp.zip" \
+              --only-show-errors
             echo "Zip Deploy da Function concluído."
 
       - name: Obter master key da Function App
@@ -264,7 +235,6 @@ jobs:
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
 
-      # --- Deploy do Web App com Function URL e CONTAINER_ENDPOINT_SAS ---
       - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS
         uses: azure/cli@v1
         with:
@@ -275,18 +245,7 @@ jobs:
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/web-app.bicep \
-              --parameters \
-                webAppName="$WEBAPP_NAME" \
-                planName="ASP-MiniProjetoCloud2.0" \
-                imageName="rodrig0salv/minha-app:latest" \
-                containerRegistryUrl="" \
-                containerRegistryUsername="" \
-                containerRegistryPassword="" \
-                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
-                containerName="${CONTAINER_NAME}" \
-                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
-                functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
-                containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
+              --parameters webAppName="$WEBAPP_NAME" planName="ASP-MiniProjetoCloud2.0" imageName="rodrig0salv/minha-app:latest" containerRegistryUrl="" containerRegistryUsername="" containerRegistryPassword="" storageAccountName="${STORAGE_ACCOUNT_NAME}" containerName="${CONTAINER_NAME}" containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
               --only-show-errors
             echo "Web App deployment concluído: $DEPLOY_NAME"
 
@@ -297,14 +256,15 @@ jobs:
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
-              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true
+              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              --only-show-errors
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
-            az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME"
-            az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME"
+            az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME" --only-show-errors
+            az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --only-show-errors
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1

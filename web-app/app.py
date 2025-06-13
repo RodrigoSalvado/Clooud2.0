@@ -3,15 +3,13 @@ import requests
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from collections import Counter
 from scipy.stats import gaussian_kde
 from transformers import pipeline
 from wordcloud import WordCloud, STOPWORDS
 from flask import Flask, render_template, request, flash, redirect, url_for, session
 import re
-from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient, ContentSettings
+from azure.storage.blob import BlobClient, ContainerClient, ContentSettings
 from datetime import datetime
-from urllib.parse import urlparse
 import logging
 
 # Configuração de logging
@@ -99,23 +97,21 @@ def detail_all():
         return redirect(url_for("home"))
 
     analysed_posts = []
+    # Certifica-se de que a pasta static exista
     os.makedirs("static", exist_ok=True)
     text_accum = []
     neg_probs, neu_probs, pos_probs = [], [], []
 
     # Analisar cada post
     for post in posts:
-        # Usar selftext se existir texto, senão o título
         input_text = post.get('selftext', '').strip() or post.get('title', '').strip()
         if not input_text:
-            # Sem texto para analisar, pular sentimento
             post['sentimento'] = 'Unknown'
             post['probabilidade'] = 0
             post['scores_raw'] = {}
         else:
             try:
                 sentiment = classifier(input_text, candidate_labels)
-                # O zero-shot retorna 'labels' ordenados por score decrescente
                 scores = dict(zip(sentiment['labels'], sentiment['scores']))
                 top_label = sentiment['labels'][0].capitalize()
                 post['sentimento'] = top_label
@@ -137,31 +133,27 @@ def detail_all():
     resumo_chart = None
     wc_chart = None
 
-    # Gerar gráfico de densidade apenas se tivermos pelo menos 2 valores em qualquer série
+    # Gerar gráfico de densidade apenas se tivermos ao menos 2 valores no total
     try:
-        # Verificar se temos dados suficientes: ao menos 2 valores em algum array
-        # Aqui podemos exigir pelo menos 2 elementos em TOTAL: se apenas 1 post, pulamos.
         total_values = neg_probs + neu_probs + pos_probs
         if len(total_values) < 2:
             logger.info("Dados insuficientes para KDE (menos de 2 elementos no total). Pulando geração de densidade.")
         else:
-            # Preparar KDE apenas se série tiver >1 elemento
             x = np.linspace(0, 100, 500)
             plt.figure(figsize=(8, 4))
             plotted = False
 
+            # Para cada série, plotar apenas se houver mais de 1 valor e não todos zeros
             if len(neg_probs) > 1 and any(neg_probs):
                 try:
                     kde_neg = gaussian_kde(neg_probs)
                     y_neg = kde_neg(x)
-                    # Normalizar somando
                     y_neg = y_neg / y_neg.sum() * 100
                     plt.plot(x, y_neg, label="Negative", linewidth=2)
                     plt.fill_between(x, y_neg, alpha=0.2)
                     plotted = True
                 except Exception as e:
                     logger.warning("Falha ao gerar KDE para negativos: %s", e)
-
             if len(neu_probs) > 1 and any(neu_probs):
                 try:
                     kde_neu = gaussian_kde(neu_probs)
@@ -172,7 +164,6 @@ def detail_all():
                     plotted = True
                 except Exception as e:
                     logger.warning("Falha ao gerar KDE para neutros: %s", e)
-
             if len(pos_probs) > 1 and any(pos_probs):
                 try:
                     kde_pos = gaussian_kde(pos_probs)
@@ -198,13 +189,10 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar gráfico de densidade: %s", e, exc_info=True)
 
-    # Gerar nuvem de palavras apenas se houver pelo menos 1 palavra
+    # Gerar nuvem de palavras apenas se houver pelo menos 1 palavra após filtro de stopwords
     try:
-        # Concatenar textos
         full_text = " ".join(text_accum).strip()
-        # Extrair palavras: basta verificar se há algo após split
         words = re.findall(r"\w+", full_text)
-        # Filtrar stopwords manualmente: contagem mínima
         filtered_words = [w for w in words if w.lower() not in STOPWORDS]
         if not filtered_words:
             logger.info("Dados insuficientes para WordCloud (nenhuma palavra após filtro). Pulando geração de nuvem.")
@@ -221,7 +209,7 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar wordcloud: %s", e, exc_info=True)
 
-    # Renderizar template passando os paths ou None
+    # Renderizar template passando os paths (ou None)
     return render_template(
         "detail_all.html",
         posts=analysed_posts,
@@ -246,7 +234,6 @@ def gerar_relatorio():
     local_csv_name = f"relatorio_{timestamp}.csv"
     df.to_csv(local_csv_name, index=False, encoding="utf-8")
 
-    # Enviar o CSV e gráficos gerados se existirem no container
     try:
         # Separar base e token
         parts = CONTAINER_ENDPOINT_SAS.split('?', 1)
@@ -271,7 +258,6 @@ def gerar_relatorio():
                 chart_url = f"{sas_url_base}/{target_name}?{sas_token}"
                 chart_client = BlobClient.from_blob_url(chart_url)
                 with open(local_path, "rb") as chart_file:
-                    # Determinar content_type a partir da extensão
                     chart_client.upload_blob(chart_file, overwrite=True, content_settings=ContentSettings(
                         content_type="image/png",
                         content_disposition="inline"
@@ -291,7 +277,7 @@ def listar_ficheiros():
     try:
         container_client = ContainerClient.from_container_url(CONTAINER_ENDPOINT_SAS)
         blobs = list(container_client.list_blobs())
-        # Ordenar por timestamp extraído do nome, se houver padrã
+        # Ordenar por timestamp extraído do nome, se houver padrão
         def extrai_ts(nome):
             m = re.search(r'_(\d{8}_\d{6})', nome)
             return m.group(1) if m else ""
