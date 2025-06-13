@@ -255,7 +255,7 @@ jobs:
             RG="${{ env.RG }}"
             TRANSLATOR_NAME="${{ env.TRANSLATOR_NAME }}"
             # Lista de regiões onde você confirmou suporte ao SKU F0 para Translator
-            REGIONS_CANDIDATAS=("westus2" "westeurope" "eastus" "northeurope") 
+            REGIONS_CANDIDATAS=("francecentral" "uksouth" "westus2" "westeurope" "eastus" "northeurope") 
             SUCESSO=0
 
             # 1. Verifica se já existe ativo
