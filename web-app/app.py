@@ -9,9 +9,8 @@ from transformers import pipeline
 from wordcloud import WordCloud, STOPWORDS
 from flask import Flask, render_template, request, flash, redirect, url_for, session
 import re
-from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient, ContentSettings
+from azure.storage.blob import BlobClient, ContainerClient, ContentSettings
 from datetime import datetime
-from urllib.parse import urlparse
 import logging
 
 # Configurar logging
@@ -20,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 # Inicializa Flask
 app = Flask(__name__)
-# Em produção, defina FLASK_SECRET_KEY via App Setting/Azure Key Vault/secret manager
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 
 # Variáveis de ambiente esperadas
@@ -31,7 +29,6 @@ CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")
 if not FUNCTION_URL:
     logger.error("Env var FUNCTION_URL não está configurada. Defina em App Settings antes de chamar a Function.")
 else:
-    # Log parcial da URL (não exiba toda a chave em produção)
     preview = FUNCTION_URL
     if "?" in FUNCTION_URL:
         preview = FUNCTION_URL.split("?")[0] + "?..."
@@ -42,7 +39,6 @@ if not CONTAINER_ENDPOINT_SAS or "?" not in CONTAINER_ENDPOINT_SAS:
                  "https://<account>.blob.core.windows.net/<container>?<sas-token>")
 
 # Inicializar pipeline de análise de sentimento
-# Atenção: esse carregamento pode demorar/pesado. Em produção, avalie carregar lazy ou em outra camada.
 try:
     classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
     candidate_labels = ["negative", "neutral", "positive"]
@@ -67,7 +63,6 @@ def fetch_posts(subreddit, sort, limit):
             timeout=30
         )
         logger.info(f"fetch_posts: status_code={resp.status_code}")
-        # Log de preview de resposta (cuidar para não vazar chaves)
         text_preview = resp.text[:200] + ("..." if len(resp.text) > 200 else "")
         logger.debug(f"fetch_posts: resposta text preview: {text_preview!r}")
 
@@ -78,7 +73,6 @@ def fetch_posts(subreddit, sort, limit):
         data = resp.json()
         logger.info(f"fetch_posts: JSON recebido com chaves={list(data.keys())}")
         posts = data.get("posts", data)
-        # Se for lista vazia ou não lista, pode tratar:
         if posts is None:
             flash("Backend retornou conteúdo inesperado.", "warning")
             return None
@@ -92,7 +86,6 @@ def fetch_posts(subreddit, sort, limit):
         flash(f"Erro ao obter posts: {e}", "danger")
         return None
     except ValueError as e:
-        # JSON inválido
         logger.error(f"Erro ao parsear JSON da resposta: {e}", exc_info=True)
         flash("Resposta inválida do serviço de backend.", "danger")
         return None
@@ -146,7 +139,6 @@ def detail_all():
         input_text = post.get('selftext', "").strip() or post.get('title', "")
         try:
             sentiment = classifier(input_text, candidate_labels)
-            # labels vêm em ordem de score decrescente
             scores = dict(zip(sentiment['labels'], sentiment['scores']))
             top_label = sentiment['labels'][0].capitalize()
             prob_top = int(sentiment['scores'][0] * 100)
@@ -160,60 +152,96 @@ def detail_all():
         post['probabilidade'] = prob_top
         post['scores_raw'] = scores
         analysed_posts.append(post)
+
         text_accum.append(input_text)
         neg_probs.append(scores.get("negative", 0) * 100)
         neu_probs.append(scores.get("neutral", 0) * 100)
         pos_probs.append(scores.get("positive", 0) * 100)
 
-    # Gera gráfico de densidade
+    # Gera gráfico de densidade apenas se tivermos >=2 pontos em ao menos um conjunto
+    kde_chart = None
     try:
-        x = np.linspace(0, 100, 500)
-        plt.figure(figsize=(8, 4))
+        # Verifica se há múltiplos valores para gerar KDE
+        can_kde = False
+        # Checa cada lista: precisa de pelo menos 2 valores distintos ou 2 elementos?
+        if len(neg_probs) > 1:
+            can_kde = True
+        if len(neu_probs) > 1:
+            can_kde = True
+        if len(pos_probs) > 1:
+            can_kde = True
 
-        if any(neg_probs):
-            kde_neg = gaussian_kde(neg_probs)
-            y_neg = kde_neg(x)
-            y_neg = y_neg / y_neg.sum() * 100
-            plt.plot(x, y_neg, label="Negative", linewidth=2)
-            plt.fill_between(x, y_neg, alpha=0.2)
+        if can_kde:
+            x = np.linspace(0, 100, 500)
+            plt.figure(figsize=(8, 4))
+            plotted = False
+            # Negative
+            if len(neg_probs) > 1 and any(neg_probs):
+                try:
+                    kde_neg = gaussian_kde(neg_probs)
+                    y_neg = kde_neg(x)
+                    y_neg = y_neg / y_neg.sum() * 100
+                    plt.plot(x, y_neg, label="Negative", linewidth=2)
+                    plt.fill_between(x, y_neg, alpha=0.2)
+                    plotted = True
+                except Exception as e:
+                    logger.warning("Não foi possível gerar KDE para negative.", exc_info=True)
+            # Neutral
+            if len(neu_probs) > 1 and any(neu_probs):
+                try:
+                    kde_neu = gaussian_kde(neu_probs)
+                    y_neu = kde_neu(x)
+                    y_neu = y_neu / y_neu.sum() * 100
+                    plt.plot(x, y_neu, label="Neutral", linewidth=2)
+                    plt.fill_between(x, y_neu, alpha=0.2)
+                    plotted = True
+                except Exception as e:
+                    logger.warning("Não foi possível gerar KDE para neutral.", exc_info=True)
+            # Positive
+            if len(pos_probs) > 1 and any(pos_probs):
+                try:
+                    kde_pos = gaussian_kde(pos_probs)
+                    y_pos = kde_pos(x)
+                    y_pos = y_pos / y_pos.sum() * 100
+                    plt.plot(x, y_pos, label="Positive", linewidth=2)
+                    plt.fill_between(x, y_pos, alpha=0.2)
+                    plotted = True
+                except Exception as e:
+                    logger.warning("Não foi possível gerar KDE para positive.", exc_info=True)
 
-        if any(neu_probs):
-            kde_neu = gaussian_kde(neu_probs)
-            y_neu = kde_neu(x)
-            y_neu = y_neu / y_neu.sum() * 100
-            plt.plot(x, y_neu, label="Neutral", linewidth=2)
-            plt.fill_between(x, y_neu, alpha=0.2)
-
-        if any(pos_probs):
-            kde_pos = gaussian_kde(pos_probs)
-            y_pos = kde_pos(x)
-            y_pos = y_pos / y_pos.sum() * 100
-            plt.plot(x, y_pos, label="Positive", linewidth=2)
-            plt.fill_between(x, y_pos, alpha=0.2)
-
-        plt.xlabel("Confiança da Análise (%)")
-        plt.ylabel("Distribuição Normalizada (%)")
-        plt.title("Distribuição e Densidade de Confiança por Sentimento")
-        plt.legend()
-        plt.tight_layout()
-        kde_chart = "static/distribuicao_confianca.png"
-        plt.savefig(kde_chart, dpi=200)
-        plt.close()
+            if plotted:
+                plt.xlabel("Confiança da Análise (%)")
+                plt.ylabel("Distribuição Normalizada (%)")
+                plt.title("Distribuição e Densidade de Confiança por Sentimento")
+                plt.legend()
+                plt.tight_layout()
+                kde_chart = "static/distribuicao_confianca.png"
+                plt.savefig(kde_chart, dpi=200)
+                plt.close()
+            else:
+                logger.info("Nenhum KDE plotado: dados insuficientes ou todos zero.")
+                kde_chart = None
+        else:
+            logger.info("Dados insuficientes para KDE (menos de 2 elementos em cada série). Pulando geração de densidade.")
     except Exception as e:
         logger.error("Erro ao gerar gráfico de densidade.", exc_info=True)
         kde_chart = None
 
     # Gera wordcloud
+    wc_chart = None
     try:
-        wordcloud = WordCloud(width=700, height=350, background_color="white",
-                              stopwords=set(STOPWORDS)).generate(" ".join(text_accum))
-        plt.figure(figsize=(7, 3.5))
-        plt.imshow(wordcloud, interpolation="bilinear")
-        plt.axis("off")
-        plt.tight_layout()
-        wc_chart = "static/nuvem_palavras_all.png"
-        plt.savefig(wc_chart, dpi=200)
-        plt.close()
+        if text_accum:
+            wordcloud = WordCloud(width=700, height=350, background_color="white",
+                                  stopwords=set(STOPWORDS)).generate(" ".join(text_accum))
+            plt.figure(figsize=(7, 3.5))
+            plt.imshow(wordcloud, interpolation="bilinear")
+            plt.axis("off")
+            plt.tight_layout()
+            wc_chart = "static/nuvem_palavras_all.png"
+            plt.savefig(wc_chart, dpi=200)
+            plt.close()
+        else:
+            logger.info("Nenhum texto para WordCloud.")
     except Exception as e:
         logger.error("Erro ao gerar wordcloud.", exc_info=True)
         wc_chart = None
@@ -221,6 +249,7 @@ def detail_all():
     return render_template("detail_all.html", posts=analysed_posts,
                            resumo_chart=kde_chart,
                            wc_chart=wc_chart,
+                           # gantt_chart era redundante, podemos reutilizar resumo_chart ou outro
                            gantt_chart=kde_chart)
 
 @app.route("/gerar_relatorio", methods=["POST"])
@@ -230,7 +259,6 @@ def gerar_relatorio():
         flash("Não há dados disponíveis para gerar relatório.", "warning")
         return redirect(url_for("home"))
 
-    # Validar CONTAINER_ENDPOINT_SAS
     if not CONTAINER_ENDPOINT_SAS or "?" not in CONTAINER_ENDPOINT_SAS:
         logger.error("CONTAINER_ENDPOINT_SAS inválido ou ausente no gerar_relatorio.")
         flash("Configuração de Blob SAS inválida.", "danger")
@@ -246,9 +274,7 @@ def gerar_relatorio():
         flash("Erro ao criar relatório local.", "danger")
         return redirect(url_for("home"))
 
-    # Prepara lista de charts gerados anteriormente
     charts = {}
-    # Se detail_all foi chamado antes, os charts estariam em static/
     possible_kde = "static/distribuicao_confianca.png"
     possible_wc = "static/nuvem_palavras_all.png"
     if os.path.isfile(possible_kde):
@@ -272,9 +298,9 @@ def gerar_relatorio():
 
         # Upload charts, se existirem
         for filename, local_path in charts.items():
-            chart_url = f"{sas_url_base}/{filename}?{sas_token}"
-            logger.info(f"Upload chart para blob: {chart_url}")
-            chart_client = BlobClient.from_blob_url(chart_url)
+            blob_chart_url = f"{sas_url_base}/{filename}?{sas_token}"
+            logger.info(f"Upload chart para blob: {blob_chart_url}")
+            chart_client = BlobClient.from_blob_url(blob_chart_url)
             with open(local_path, "rb") as chart_file:
                 chart_client.upload_blob(chart_file, overwrite=True, content_settings=ContentSettings(
                     content_type="image/png",
@@ -290,7 +316,6 @@ def gerar_relatorio():
 
 @app.route("/listar_ficheiros", methods=["GET"])
 def listar_ficheiros():
-    # Lista blobs no container via SAS
     if not CONTAINER_ENDPOINT_SAS or "?" not in CONTAINER_ENDPOINT_SAS:
         logger.error("CONTAINER_ENDPOINT_SAS inválido ou ausente no listar_ficheiros.")
         flash("Configuração de Blob SAS inválida.", "danger")
@@ -302,10 +327,7 @@ def listar_ficheiros():
         blobs = list(container_client.list_blobs())
         logger.info(f"Encontrados {len(blobs)} blobs no container.")
 
-        ficheiros = []
-        # Ordena por timestamp extraído do nome, se padrão contiver '_YYYYMMDD_HHMMSS'
-        for blob in blobs:
-            ficheiros.append(blob.name)
+        ficheiros = [blob.name for blob in blobs]
         ficheiros = sorted(
             ficheiros,
             key=lambda name: re.search(r'_(\d{8}_\d{6})', name).group(1) if re.search(r'_(\d{8}_\d{6})', name) else '',
@@ -320,5 +342,4 @@ def listar_ficheiros():
         return redirect(url_for("home"))
 
 if __name__ == "__main__":
-    # Em produção, Flask geralmente é executado por WSGI (Gunicorn/uvicorn), não via app.run
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))

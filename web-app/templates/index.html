@@ -10,7 +10,7 @@
 </head>
 <body>
   <div class="container mt-4">
-    <h1>Pesquisar Reddit (teste)</h1>
+    <h1>Pesquisar Reddit</h1>
 
     <!-- Formulário de busca -->
     <form method="get" action="{{ url_for('search') }}">
@@ -53,10 +53,8 @@
         <form method="post" action="{{ url_for('detail_all') }}" class="m-0">
           <input type="hidden" name="titles[]" value="{{ post.title }}">
           <input type="hidden" name="urls[]" value="{{ post.url }}">
-          <input type="hidden" name="scores[]" value="{{ post.score }}">
           <input type="hidden" name="ids[]" value="{{ post.id }}">
           <input type="hidden" name="single_post" value="true">
-          <button type="submit" class="btn btn-secondary btn-sm">Análise de Sentimento</button>
         </form>
       </li>
       {% endfor %}
@@ -67,7 +65,6 @@
       {% for post in posts %}
         <input type="hidden" name="titles[]" value="{{ post.title }}">
         <input type="hidden" name="urls[]" value="{{ post.url }}">
-        <input type="hidden" name="scores[]" value="{{ post.score }}">
         <input type="hidden" name="ids[]" value="{{ post.id }}">
       {% endfor %}
       <button type="submit" class="btn btn-success">Análise de Sentimento (Completo)</button>

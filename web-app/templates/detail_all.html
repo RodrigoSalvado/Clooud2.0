@@ -16,7 +16,9 @@
         <div class="card border-success">
           <div class="card-body">
             <h5 class="card-title text-success">Positivos</h5>
-            <p class="display-6">{{ posts | selectattr('sentimento', 'equalto', 'Positive') | list | length }}</p>
+            <p class="display-6">
+              {{ posts | selectattr('sentimento', 'equalto', 'Positive') | list | length }}
+            </p>
           </div>
         </div>
       </div>
@@ -24,7 +26,9 @@
         <div class="card border-warning">
           <div class="card-body">
             <h5 class="card-title text-warning">Neutros</h5>
-            <p class="display-6">{{ posts | selectattr('sentimento', 'equalto', 'Neutral') | list | length }}</p>
+            <p class="display-6">
+              {{ posts | selectattr('sentimento', 'equalto', 'Neutral') | list | length }}
+            </p>
           </div>
         </div>
       </div>
@@ -32,7 +36,9 @@
         <div class="card border-danger">
           <div class="card-body">
             <h5 class="card-title text-danger">Negativos</h5>
-            <p class="display-6">{{ posts | selectattr('sentimento', 'equalto', 'Negative') | list | length }}</p>
+            <p class="display-6">
+              {{ posts | selectattr('sentimento', 'equalto', 'Negative') | list | length }}
+            </p>
           </div>
         </div>
       </div>
@@ -43,12 +49,17 @@
       <h4>Lista de Posts Analisados</h4>
       <ul class="list-group">
         {% for post in posts %}
-        <li class="list-group-item">
-          <h6>{{ post.title }}</h6>
-          <p><strong>Sentimento:</strong> {{ post.sentimento }} |
-             <strong>Confiança:</strong> {{ post.probabilidade }}%</p>
-          <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
-        </li>
+          <li class="list-group-item">
+            <h6>{{ post.title }}</h6>
+            <p>
+              <strong>Sentimento:</strong> {{ post.sentimento }}
+              |
+              <strong>Confiança:</strong> {{ post.probabilidade }}%
+            </p>
+            {% if post.url %}
+              <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
+            {% endif %}
+          </li>
         {% endfor %}
       </ul>
     </div>
@@ -56,29 +67,46 @@
     <!-- Gráfico de densidade -->
     <div class="mb-5">
       <h4>Distribuição da Confiança por Sentimento</h4>
-      <img src="{{ url_for('static', filename=resumo_chart.split('static/')[-1]) }}" class="img-fluid" alt="Densidade">
+      {% if resumo_chart %}
+        {# resumo_chart deve ser algo como "static/distribuicao_confianca.png" #}
+        <img src="{{ url_for('static', filename=resumo_chart.split('static/')[-1]) }}"
+             class="img-fluid"
+             alt="Densidade">
+      {% else %}
+        <p class="text-muted">Dados insuficientes para exibir gráfico de densidade.</p>
+      {% endif %}
     </div>
 
     <!-- Nuvem de palavras -->
     <div class="mb-5">
       <h4>Nuvem de Palavras</h4>
-      <img src="{{ url_for('static', filename=wc_chart.split('static/')[-1]) }}" class="img-fluid" alt="Nuvem de Palavras">
+      {% if wc_chart %}
+        <img src="{{ url_for('static', filename=wc_chart.split('static/')[-1]) }}"
+             class="img-fluid"
+             alt="Nuvem de Palavras">
+      {% else %}
+        <p class="text-muted">Não foi possível gerar nuvem de palavras.</p>
+      {% endif %}
     </div>
 
-  <div class="mb-4 text-end">
     <!-- Botão para gerar relatório -->
-    <form action="{{ url_for('gerar_relatorio') }}" method="post">
-      <button type="submit" class="btn btn-outline-dark mb-4">📄 Gerar Relatório CSV</button>
-    </form>
-  </div>
-  
-  <a href="{{ url_for('search',
-                        subreddit=session['search_params']['subreddit'],
-                        sort=session['search_params']['sort'],
-                        limit=session['search_params']['limit']) }}"
-       class="btn btn-secondary">← Voltar à Pesquisa</a>
+    <div class="mb-4 text-end">
+      <form action="{{ url_for('gerar_relatorio') }}" method="post">
+        <button type="submit" class="btn btn-outline-dark mb-4">📄 Gerar Relatório CSV</button>
+      </form>
+    </div>
 
-    
+    <!-- Link voltar à pesquisa, se existirem parâmetros -->
+    {% if session.search_params is defined and session.search_params.subreddit %}
+      <a href="{{ url_for('search',
+                          subreddit=session.search_params.subreddit,
+                          sort=session.search_params.sort,
+                          limit=session.search_params.limit) }}"
+         class="btn btn-secondary">← Voltar à Pesquisa</a>
+    {% else %}
+      <a href="{{ url_for('home') }}" class="btn btn-secondary">← Voltar</a>
+    {% endif %}
+
   </div>
 </body>
 </html>
