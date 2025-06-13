@@ -29,11 +29,19 @@ param containerSasToken string
 @description('URL da Function (SearchFunction) com a master key, para armazenar no app setting FUNCTION_URL. Se vazio, não será adicionado.')
 param functionUrl string = ''
 
-// Referência ao App Service Plan existente:
+@description('Lista de origens permitidas para CORS. Use ["*"] para permitir todas as origens (cuidado com segurança).')
+param allowedCorsOrigins array = []
+
+// Variáveis auxiliares para condições
+var usePrivateRegistry = containerRegistryUrl != ''
+var addFunctionUrl = functionUrl != ''
+
+// Referência ao App Service Plan existente
 resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
+// Criação / atualização do Web App Linux em container
 resource webApp 'Microsoft.Web/sites@2021-03-01' = {
   name: webAppName
   location: resourceGroup().location
@@ -42,15 +50,17 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     siteConfig: {
-      // Define a imagem de container Docker usando interpolação de string
-      // Bicep aceita: 'DOCKER|${imageName}'
+      // Configuração do container Docker
       linuxFxVersion: 'DOCKER|${imageName}'
-
-      // Always On recomendado para container apps
       alwaysOn: true
 
+      // CORS: origens permitidas
+      cors: {
+        allowedOrigins: allowedCorsOrigins
+      }
+
+      // App settings para a aplicação
       appSettings: [
-        // Desabilita uso de storage compartilhado do App Service (ajuste se precisar montar storage)
         {
           name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
           value: 'false'
@@ -67,27 +77,27 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
           name: 'CONTAINER_SAS_TOKEN'
           value: containerSasToken
         }
-        // Se existir registro privado, adiciona as settings Docker:
-        // Em Bicep, podemos condicionalmente incluir settings, mas a sintaxe de concat com conditionais
-        // fica mais verbosa. Uma forma clara: aqui incluímos sempre, mas deixamos vazios se parâmetros vazios.
-        {
-          name: 'DOCKER_REGISTRY_SERVER_URL'
-          value: containerRegistryUrl
+        // Se usar registry privado, adiciona estas settings:
+        if (usePrivateRegistry) {
+          {
+            name: 'DOCKER_REGISTRY_SERVER_URL'
+            value: containerRegistryUrl
+          }
+          {
+            name: 'DOCKER_REGISTRY_SERVER_USERNAME'
+            value: containerRegistryUsername
+          }
+          {
+            name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
+            value: containerRegistryPassword
+          }
         }
-        {
-          name: 'DOCKER_REGISTRY_SERVER_USERNAME'
-          value: containerRegistryUsername
-        }
-        {
-          name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
-          value: containerRegistryPassword
-        }
-        // Se functionUrl for fornecido, adiciona FUNCTION_URL
-        // Se estiver vazio, ainda será criado, mas vazio. Se preferir não criar a app setting quando vazio,
-        // é possível usar concat e condições, mas simplificamos incluindo-o sempre.
-        {
-          name: 'FUNCTION_URL'
-          value: functionUrl
+        // Se fornecido functionUrl, adiciona app setting FUNCTION_URL
+        if (addFunctionUrl) {
+          {
+            name: 'FUNCTION_URL'
+            value: functionUrl
+          }
         }
       ]
 
@@ -97,5 +107,5 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
   }
 }
 
-// Saída opcional, caso queira referenciar em outro módulo
+// Saída opcional: hostname padrão do Web App
 output defaultHostName string = webApp.properties.defaultHostName
