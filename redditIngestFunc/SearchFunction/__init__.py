@@ -1,5 +1,35 @@
 import os
+import sys
 import logging
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configurar vendored_path antes de imports externos
+def _setup_vendored_path():
+    cwd = os.getcwd()
+    basedir = os.path.dirname(__file__)
+    candidates = [
+        os.path.join(cwd, '.python_packages', 'lib', 'site-packages'),
+        os.path.join(os.path.abspath(os.path.join(basedir, '..')), '.python_packages', 'lib', 'site-packages')
+    ]
+    logger.info(f"[DEBUG] cwd: {cwd}, __file__: {__file__}, basedir: {basedir}")
+    for vendored in candidates:
+        exists = os.path.isdir(vendored)
+        logger.info(f"[DEBUG] Vendored candidate {vendored} exists? {exists}")
+        if exists:
+            if vendored not in sys.path:
+                sys.path.insert(0, vendored)
+                logger.info(f"[DEBUG] Inserido vendored_path em sys.path: {vendored}")
+            else:
+                logger.info(f"[DEBUG] Vendored_path já em sys.path: {vendored}")
+            return
+    logger.info(f"[DEBUG] Nenhum vendored_path encontrado em candidatos: {candidates}")
+
+_setup_vendored_path()
+
+# Agora importa normalmente
 import json
 import requests
 from requests.auth import HTTPBasicAuth
@@ -7,64 +37,27 @@ import azure.functions as func
 from azure.cosmos import CosmosClient
 
 # --- Azure Translator Config ---
-# TRANSLATOR_KEY = os.environ.get("TRANSLATOR_KEY")
-# TRANSLATOR_ENDPOINT = os.environ.get("TRANSLATOR_ENDPOINT")
-# TRANSLATOR_REGION = os.environ.get("TRANSLATOR_REGION", "francecentral")
+TRANSLATOR_KEY = os.environ.get("TRANSLATOR_KEY")
+TRANSLATOR_ENDPOINT = os.environ.get("TRANSLATOR_ENDPOINT")
+TRANSLATOR_REGION = os.environ.get("TRANSLATOR_REGION", "francecentral")
 
-# --- Funções de Tradução ---
-# Comentadas para desativar o uso do Azure Translator
-
+# --- Funções de Tradução (comentadas) ---
 # def detect_language(text: str) -> str:
-#     """Detecta o idioma de um texto usando Azure Translator."""
-#     path = '/detect'
-#     url = TRANSLATOR_ENDPOINT + path
-#     params = {'api-version': '3.0'}
-#     headers = {
-#         'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
-#         'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
-#         'Content-Type': 'application/json'
-#     }
-#     body = [{'text': text}]
-#     resp = requests.post(url, params=params, headers=headers, json=body)
-#     resp.raise_for_status()
-#     return resp.json()[0]['language']
-
-
+#     ...
 # def translate_to_english(text: str, from_lang: str = None) -> str:
-#     """Traduz texto para inglês usando Azure Translator."""
-#     path = '/translate'
-#     url = TRANSLATOR_ENDPOINT + path
-#     params = {'api-version': '3.0', 'to': ['en']}
-#     if from_lang:
-#         params['from'] = from_lang
-#     headers = {
-#         'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
-#         'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
-#         'Content-Type': 'application/json'
-#     }
-#     body = [{'text': text}]
-#     resp = requests.post(url, params=params, headers=headers, json=body)
-#     resp.raise_for_status()
-#     result = resp.json()
-#     return result[0]['translations'][0]['text']
+#     ...
 
 # --- Configurações e credenciais ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Leitura flexível de credenciais Reddit
 CLIENT_ID = os.environ.get("CLIENT_ID") or os.environ.get("REDDIT_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("SECRET") or os.environ.get("REDDIT_CLIENT_SECRET")
 REDDIT_USER = os.environ.get("REDDIT_USER")
 REDDIT_PASSWORD = os.environ.get("REDDIT_PASSWORD")
 
-# Configurações do Cosmos DB
 COSMOS_ENDPOINT = os.environ.get("COSMOS_ENDPOINT")
 COSMOS_KEY      = os.environ.get("COSMOS_KEY")
 COSMOS_DATABASE = os.environ.get("COSMOS_DATABASE", "RedditApp")
 COSMOS_CONTAINER = os.environ.get("COSMOS_CONTAINER", "posts")
 
-# Log de presença das variáveis
 logger.info(f"Credenciais Reddit: CLIENT_ID={'OK' if CLIENT_ID else 'MISSING'}, "
             f"CLIENT_SECRET={'OK' if CLIENT_SECRET else 'MISSING'}, "
             f"REDDIT_USER={'OK' if REDDIT_USER else 'MISSING'}, "
@@ -73,9 +66,9 @@ logger.info(f"Cosmos DB: ENDPOINT={'OK' if COSMOS_ENDPOINT else 'MISSING'}, "
             f"KEY={'OK' if COSMOS_KEY else 'MISSING'}")
 logger.info(f"Translator: KEY={'OK' if TRANSLATOR_KEY else 'MISSING'}, "
             f"ENDPOINT={'OK' if TRANSLATOR_ENDPOINT else 'MISSING'}")
-# Apesar de mantermos as variáveis de ambiente, a lógica de tradução está comentada.
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    logger.info("[DEBUG] sys.path em main começa com: %s", sys.path[:5])
     logger.info("HTTP trigger recebido para buscar Reddit e gravar no Cosmos")
 
     subreddit = req.params.get("subreddit")
@@ -132,7 +125,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def _fetch_and_store(subreddit: str, sort: str, limit: int):
-    # Autenticação OAuth2 no Reddit
     auth = HTTPBasicAuth(CLIENT_ID, CLIENT_SECRET)
     token_res = requests.post(
         "https://www.reddit.com/api/v1/access_token",
@@ -149,7 +141,6 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
     if not token:
         raise RuntimeError("Não obteve access_token do Reddit.")
 
-    # Fetch de posts
     res = requests.get(
         f"https://oauth.reddit.com/r/{subreddit}/{sort}",
         headers={
@@ -177,14 +168,7 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
         if not rid:
             continue
         title = d.get("title", "")
-        # Tradutor desativado: o bloco abaixo foi comentado
-        # if TRANSLATOR_ENDPOINT and TRANSLATOR_KEY:
-        #     lang = detect_language(title)
-        #     if lang.lower().startswith('en'):
-        #         title_eng = title
-        #     else:
-        #         title_eng = translate_to_english(title, from_lang=lang)
-
+        # Tradutor desativado
         item = {
             "id":        f"{subreddit}_{rid}",
             "subreddit": subreddit,
