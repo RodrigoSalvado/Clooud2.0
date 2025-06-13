@@ -10,3 +10,4 @@ wordcloud
 azure-storage-blob
 azure-cosmos
 dotenv
+logging

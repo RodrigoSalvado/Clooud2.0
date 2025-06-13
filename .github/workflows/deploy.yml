@@ -167,6 +167,22 @@ jobs:
               -o tsv)
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
 
+      # --- Etapas de build e push da imagem Docker antes de criar a Web App ---
+      - name: Login Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build da imagem Docker da Web App
+        run: |
+          echo "A construir a imagem Docker: rodrig0salv/minha-app:latest"
+          # Ajusta o contexto se o Dockerfile estiver noutro diretório
+          docker build -t rodrig0salv/minha-app:latest .
+      - name: Push da imagem Docker para Docker Hub
+        run: |
+          echo "A enviar a imagem Docker para Docker Hub"
+          docker push rodrig0salv/minha-app:latest
+
       - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
         uses: azure/cli@v1
         with:
@@ -281,18 +297,6 @@ jobs:
               --name "$FUNCTIONAPP_NAME" \
               --src "$GITHUB_WORKSPACE/funcapp.zip"
             echo "Zip Deploy concluído."
-
-      # Poderias manter como alternativa o func azure functionapp publish, mas Zip Deploy com SCM_DO_BUILD_DURING_DEPLOYMENT=true geralmente instala deps.
-      # Se quiseres usar func Core Tools, inclui algo assim:
-      # - name: Publicar Azure Function App com Remote Build (verbose)
-      #   env:
-      #     RG: ${{ env.RG }}
-      #     FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
-      #     AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc"
-      #   run: |
-      #     cd "$AZURE_FUNCTIONAPP_PACKAGE_PATH"
-      #     echo "Publicando Function App '$FUNCTIONAPP_NAME' com func Core Tools (remote build)..."
-      #     func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build remote --verbose
 
       - name: Obter master key da Function App e atualizar Web App
         env:

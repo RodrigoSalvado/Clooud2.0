@@ -23,20 +23,27 @@ CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")
 classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 candidate_labels = ["negative", "neutral", "positive"]
 
+import logging
+logger = logging.getLogger(__name__)
+
 def fetch_posts(subreddit, sort, limit):
-    """Chama a Azure Function e retorna lista de posts ou None em caso de erro."""
     try:
+        logger.info(f"fetch_posts: FUNCTION_URL={FUNCTION_URL}, params={{subreddit:{subreddit},sort:{sort},limit:{limit}}}")
         resp = requests.get(
             FUNCTION_URL,
             params={"subreddit": subreddit, "sort": sort, "limit": limit},
             timeout=30
         )
+        logger.info(f"fetch_posts: status_code={resp.status_code}, text_preview={resp.text[:200]!r}")
         resp.raise_for_status()
         data = resp.json()
+        logger.info(f"fetch_posts: JSON recebido keys={list(data.keys())}")
         return data.get("posts", data)
     except Exception as e:
+        logger.error(f"Erro ao obter posts: {e}", exc_info=True)
         flash(f"Erro ao obter posts: {e}", "danger")
         return None
+
 
 @app.route("/", methods=["GET"])
 def home():
