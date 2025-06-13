@@ -162,7 +162,6 @@ jobs:
               --template-file templates/function-app.bicep \
               --parameters \
                 functionAppName="$FUNCTIONAPP_NAME" \
-                # Se o seu template Bicep usar planName ou existingPlanResourceId, ajuste conforme template:
                 planName="ASP-MiniProjetoCloud2.0" \
                 storageAccountName="miniprojetostorage20" \
                 cosmosAccountName="cosmosdbminiprojeto" \
@@ -176,6 +175,7 @@ jobs:
                 translatorKey="" \
               --only-show-errors
             echo "Function App deployment concluído: $DEPLOY_NAME"
+
 
       - name: Criar Translator Free em região suportada e configurar App Settings na Function App
         uses: azure/cli@v1
