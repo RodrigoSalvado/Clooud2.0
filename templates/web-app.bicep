@@ -20,9 +20,11 @@ param storageAccountName string
 @description('Nome do container na Storage Account.')
 param containerName string
 
+@secure()
 @description('SAS token para o container (opcional). Se vazio, não será adicionado como APP SETTING.')
 param containerSasToken string = ''
 
+@secure()
 @description('URL completo do container com SAS (opcional). Será colocado em APP SETTING CONTAINER_ENDPOINT_SAS se não vazio.')
 param containerEndpointSas string = ''
 
@@ -102,7 +104,7 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     siteConfig: {
-      // Imagem de container
+      // Imagem de container Docker
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
 
@@ -113,7 +115,7 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
         ]
       }
 
-      // Concatena todos os arrays de App Settings, só inclui blocos não vazios
+      // Concatena todos os arrays de App Settings, incluindo apenas os não vazios
       appSettings: concat(
         concat(
           concat(

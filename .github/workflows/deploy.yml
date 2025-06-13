@@ -89,7 +89,11 @@ jobs:
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/storage-account.bicep \
-              --parameters storageAccountName="${STORAGE_ACCOUNT_NAME}" containerName="${CONTAINER_NAME}" enableBlobVersioning=true blobSoftDeleteDays=7 \
+              --parameters \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                containerName="${CONTAINER_NAME}" \
+                enableBlobVersioning=true \
+                blobSoftDeleteDays=7 \
               --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
@@ -112,7 +116,13 @@ jobs:
                 --name "$DEPLOY_NAME" \
                 --resource-group "$RG" \
                 --template-file templates/cosmosdb.bicep \
-                --parameters cosmosAccountName="$ACCOUNT_NAME" cosmosLocation="$TARGET_LOCATION" cosmosDatabaseName='RedditApp' cosmosContainerName='posts' cosmosPartitionKeyPath='/id' cosmosThroughput=${COSMOS_THROUGHPUT} \
+                --parameters \
+                  cosmosAccountName="$ACCOUNT_NAME" \
+                  cosmosLocation="$TARGET_LOCATION" \
+                  cosmosDatabaseName='RedditApp' \
+                  cosmosContainerName='posts' \
+                  cosmosPartitionKeyPath='/id' \
+                  cosmosThroughput=${COSMOS_THROUGHPUT} \
                 --only-show-errors
               echo "Deploy Cosmos concluído: $DEPLOY_NAME"
             fi
@@ -127,7 +137,13 @@ jobs:
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/app-service-plan.bicep \
-              --parameters planName='ASP-MiniProjetoCloud2.0' skuTier='Basic' skuName='B2' capacity=1 isLinux=true location="$TARGET_LOCATION" \
+              --parameters \
+                planName='ASP-MiniProjetoCloud2.0' \
+                skuTier='Basic' \
+                skuName='B2' \
+                capacity=1 \
+                isLinux=true \
+                location="$TARGET_LOCATION" \
               --only-show-errors
             echo "App Service Plan deploy concluído: $DEPLOY_NAME"
 
@@ -138,7 +154,7 @@ jobs:
           inlineScript: |
             ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
             CONTAINER_NAME="${CONTAINER_NAME}"
-            # Gera token SAS com permissão de leitura, escrita e delete (para overwrite se necessário)
+            # Gera token SAS com permissão de leitura, escrita e delete (para overwrite, se necessário)
             EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
             sasToken=$(az storage container generate-sas \
               --account-name "$ACCOUNT_NAME" \
@@ -186,7 +202,19 @@ jobs:
               --name "deploy-funcapp-$(date +%s)" \
               --resource-group "$RG" \
               --template-file templates/function-app.bicep \
-              --parameters functionAppName="$FUNCTIONAPP_NAME" planName="ASP-MiniProjetoCloud2.0" storageAccountName="${STORAGE_ACCOUNT_NAME}" cosmosAccountName="cosmosdbminiprojeto" cosmosDatabaseName="RedditApp" cosmosContainerName="posts" redditUser="Major-Noise-6411" redditPassword="miniprojetocloud" secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" clientIdValue="bzG6zHjC23GSenSIXe0M-Q" translatorEndpoint="" translatorKey="" \
+              --parameters \
+                functionAppName="$FUNCTIONAPP_NAME" \
+                planName="ASP-MiniProjetoCloud2.0" \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                cosmosAccountName="cosmosdbminiprojeto" \
+                cosmosDatabaseName="RedditApp" \
+                cosmosContainerName="posts" \
+                redditUser="Major-Noise-6411" \
+                redditPassword="miniprojetocloud" \
+                secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" \
+                clientIdValue="bzG6zHjC23GSenSIXe0M-Q" \
+                translatorEndpoint="" \
+                translatorKey="" \
               --only-show-errors
             echo "Function App deployment via Bicep concluído."
 
@@ -245,7 +273,18 @@ jobs:
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
               --template-file templates/web-app.bicep \
-              --parameters webAppName="$WEBAPP_NAME" planName="ASP-MiniProjetoCloud2.0" imageName="rodrig0salv/minha-app:latest" containerRegistryUrl="" containerRegistryUsername="" containerRegistryPassword="" storageAccountName="${STORAGE_ACCOUNT_NAME}" containerName="${CONTAINER_NAME}" containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
+              --parameters \
+                webAppName="$WEBAPP_NAME" \
+                planName="ASP-MiniProjetoCloud2.0" \
+                imageName="rodrig0salv/minha-app:latest" \
+                containerRegistryUrl="" \
+                containerRegistryUsername="" \
+                containerRegistryPassword="" \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                containerName="${CONTAINER_NAME}" \
+                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
+                functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
+                containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
               --only-show-errors
             echo "Web App deployment concluído: $DEPLOY_NAME"
 
