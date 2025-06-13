@@ -7,44 +7,46 @@ import azure.functions as func
 from azure.cosmos import CosmosClient
 
 # --- Azure Translator Config ---
-TRANSLATOR_KEY = os.environ.get("TRANSLATOR_KEY")
-TRANSLATOR_ENDPOINT = os.environ.get("TRANSLATOR_ENDPOINT")
-TRANSLATOR_REGION = os.environ.get("TRANSLATOR_REGION", "francecentral")
+# TRANSLATOR_KEY = os.environ.get("TRANSLATOR_KEY")
+# TRANSLATOR_ENDPOINT = os.environ.get("TRANSLATOR_ENDPOINT")
+# TRANSLATOR_REGION = os.environ.get("TRANSLATOR_REGION", "francecentral")
 
 # --- Funções de Tradução ---
-def detect_language(text: str) -> str:
-    """Detecta o idioma de um texto usando Azure Translator."""
-    path = '/detect'
-    url = TRANSLATOR_ENDPOINT + path
-    params = {'api-version': '3.0'}
-    headers = {
-        'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
-        'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
-        'Content-Type': 'application/json'
-    }
-    body = [{'text': text}]
-    resp = requests.post(url, params=params, headers=headers, json=body)
-    resp.raise_for_status()
-    return resp.json()[0]['language']
+# Comentadas para desativar o uso do Azure Translator
+
+# def detect_language(text: str) -> str:
+#     """Detecta o idioma de um texto usando Azure Translator."""
+#     path = '/detect'
+#     url = TRANSLATOR_ENDPOINT + path
+#     params = {'api-version': '3.0'}
+#     headers = {
+#         'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
+#         'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
+#         'Content-Type': 'application/json'
+#     }
+#     body = [{'text': text}]
+#     resp = requests.post(url, params=params, headers=headers, json=body)
+#     resp.raise_for_status()
+#     return resp.json()[0]['language']
 
 
-def translate_to_english(text: str, from_lang: str = None) -> str:
-    """Traduz texto para inglês usando Azure Translator."""
-    path = '/translate'
-    url = TRANSLATOR_ENDPOINT + path
-    params = {'api-version': '3.0', 'to': ['en']}
-    if from_lang:
-        params['from'] = from_lang
-    headers = {
-        'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
-        'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
-        'Content-Type': 'application/json'
-    }
-    body = [{'text': text}]
-    resp = requests.post(url, params=params, headers=headers, json=body)
-    resp.raise_for_status()
-    result = resp.json()
-    return result[0]['translations'][0]['text']
+# def translate_to_english(text: str, from_lang: str = None) -> str:
+#     """Traduz texto para inglês usando Azure Translator."""
+#     path = '/translate'
+#     url = TRANSLATOR_ENDPOINT + path
+#     params = {'api-version': '3.0', 'to': ['en']}
+#     if from_lang:
+#         params['from'] = from_lang
+#     headers = {
+#         'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
+#         'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
+#         'Content-Type': 'application/json'
+#     }
+#     body = [{'text': text}]
+#     resp = requests.post(url, params=params, headers=headers, json=body)
+#     resp.raise_for_status()
+#     result = resp.json()
+#     return result[0]['translations'][0]['text']
 
 # --- Configurações e credenciais ---
 logging.basicConfig(level=logging.INFO)
@@ -71,7 +73,7 @@ logger.info(f"Cosmos DB: ENDPOINT={'OK' if COSMOS_ENDPOINT else 'MISSING'}, "
             f"KEY={'OK' if COSMOS_KEY else 'MISSING'}")
 logger.info(f"Translator: KEY={'OK' if TRANSLATOR_KEY else 'MISSING'}, "
             f"ENDPOINT={'OK' if TRANSLATOR_ENDPOINT else 'MISSING'}")
-
+# Apesar de mantermos as variáveis de ambiente, a lógica de tradução está comentada.
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logger.info("HTTP trigger recebido para buscar Reddit e gravar no Cosmos")
@@ -175,13 +177,13 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
         if not rid:
             continue
         title = d.get("title", "")
-        # 1) Detecta idioma e traduz apenas se necessário
-        if TRANSLATOR_ENDPOINT and TRANSLATOR_KEY:
-            lang = detect_language(title)
-            if lang.lower().startswith('en'):
-                title_eng = title
-            else:
-                title_eng = translate_to_english(title, from_lang=lang)
+        # Tradutor desativado: o bloco abaixo foi comentado
+        # if TRANSLATOR_ENDPOINT and TRANSLATOR_KEY:
+        #     lang = detect_language(title)
+        #     if lang.lower().startswith('en'):
+        #         title_eng = title
+        #     else:
+        #         title_eng = translate_to_english(title, from_lang=lang)
 
         item = {
             "id":        f"{subreddit}_{rid}",
