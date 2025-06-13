@@ -1,47 +1,40 @@
 @description('Nome do Web App a criar/atualizar')
 param webAppName string
 
-@description('Nome do App Service Plan existente (deve já existir no mesmo resource group) ou que será referenciado')
+@description('Nome do App Service Plan existente')
 param planName string
 
-@description('Nome da imagem Docker, no formato <registry>/<repository>:<tag>, ex: "rodrig0salv/minha-app:latest"')
+@description('Nome da imagem Docker no formato <registry>/<repo>:<tag>')
 param imageName string
 
-@description('URL do registry Docker (ex: https://index.docker.io ou URL do container registry). Se vazio, considera imagem pública no Docker Hub.')
+@description('URL do registry Docker. Se vazio, assume público Docker Hub.')
 param containerRegistryUrl string = ''
-
-@description('Username para o registry. Se containerRegistryUrl vazio, pode ser deixado em branco.')
+@description('Username para o registry (se privado).')
 param containerRegistryUsername string = ''
-
 @secure()
-@description('Password para o registry. Se containerRegistryUrl vazio, pode ser deixado em branco.')
+@description('Password para o registry (se privado).')
 param containerRegistryPassword string = ''
 
-@description('Nome da Storage Account para uso pela aplicação (apenas para app settings).')
+@description('Nome da Storage Account para app settings.')
 param storageAccountName string
-
-@description('Nome do container dentro da Storage Account (apenas para app settings).')
+@description('Nome do container na Storage Account.')
 param containerName string
-
-@description('SAS token a usar no acesso ao container (apenas para app settings).')
+@description('SAS token para o container.')
 param containerSasToken string
 
-@description('URL da Function (SearchFunction) com a master key, para armazenar no app setting FUNCTION_URL. Se vazio, não será adicionado.')
+@description('URL completa da Function (com master key), para app setting FUNCTION_URL. Se vazio, não adiciona.')
 param functionUrl string = ''
 
-@description('Lista de origens permitidas para CORS. Use ["*"] para permitir todas as origens (cuidado com segurança).')
+@description('Origens permitidas para CORS. Ex: ["https://meusite.com"]. Use ["*"] com cautela.')
 param allowedCorsOrigins array = []
 
-// Variáveis auxiliares para condições
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
 
-// Referência ao App Service Plan existente
 resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
-// Define arrays de appSettings
 var baseAppSettings = [
   {
     name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
@@ -61,7 +54,8 @@ var baseAppSettings = [
   }
 ]
 
-var privateRegistrySettings = usePrivateRegistry ? [
+// Anotação de tipo “array” garante que [] vazio casa com o tipo
+var privateRegistrySettings array = usePrivateRegistry ? [
   {
     name: 'DOCKER_REGISTRY_SERVER_URL'
     value: containerRegistryUrl
@@ -76,14 +70,13 @@ var privateRegistrySettings = usePrivateRegistry ? [
   }
 ] : []
 
-var functionUrlSettings = addFunctionUrl ? [
+var functionUrlSettings array = addFunctionUrl ? [
   {
     name: 'FUNCTION_URL'
     value: functionUrl
   }
 ] : []
 
-// Criação / atualização do Web App Linux em container
 resource webApp 'Microsoft.Web/sites@2021-03-01' = {
   name: webAppName
   location: resourceGroup().location
@@ -106,5 +99,4 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
   }
 }
 
-// Saída opcional: hostname padrão do Web App
 output defaultHostName string = webApp.properties.defaultHostName

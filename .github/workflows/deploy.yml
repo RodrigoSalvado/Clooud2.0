@@ -22,9 +22,8 @@ jobs:
       TARGET_LOCATION: 'francecentral'
       WEBAPP_NAME: 'minhaapp-rodrig0salv'
       AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
-      # Variáveis do Translator mantêm-se removidas
-      # Se precisares de FUNCTION_PLAN_RESOURCE_ID, define nos secrets ou como env var
-      # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
+      STORAGE_ACCOUNT_NAME: 'miniprojetostorage20'
+      CONTAINER_NAME: 'reddit-posts'
 
     steps:
       - name: Checkout do repositório
@@ -44,7 +43,7 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      - name: (Re)Criar Resource Group em francecentral
+      - name: (Re)Criar Resource Group em ${{ env.TARGET_LOCATION }}
         run: |
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
@@ -91,8 +90,8 @@ jobs:
               --resource-group "$RG" \
               --template-file templates/storage-account.bicep \
               --parameters \
-                storageAccountName='miniprojetostorage20' \
-                containerName='reddit-posts' \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                containerName="${CONTAINER_NAME}" \
                 enableBlobVersioning=true \
                 blobSoftDeleteDays=7 \
               --only-show-errors
@@ -153,8 +152,8 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            ACCOUNT_NAME="miniprojetostorage20"
-            CONTAINER_NAME="reddit-posts"
+            ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
+            CONTAINER_NAME="${CONTAINER_NAME}"
             EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
             sasToken=$(az storage container generate-sas \
               --account-name $ACCOUNT_NAME \
@@ -177,7 +176,6 @@ jobs:
       - name: Build da imagem Docker da Web App
         run: |
           echo "A construir a imagem Docker: rodrig0salv/minha-app:latest"
-          # Contexto e Dockerfile em ./web-app
           docker build -t rodrig0salv/minha-app:latest ./web-app
 
       - name: Push da imagem Docker para Docker Hub
@@ -185,30 +183,7 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Web App (sem App Insights nem Managed Identity via parâmetro)
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            DEPLOY_NAME="deploy-webapp-$(date +%s)"
-            echo "Deploy Web App ($WEBAPP_NAME) sem App Insights..."
-            az deployment group create \
-              --name "$DEPLOY_NAME" \
-              --resource-group "$RG" \
-              --template-file templates/web-app.bicep \
-              --parameters \
-                webAppName="$WEBAPP_NAME" \
-                planName="ASP-MiniProjetoCloud2.0" \
-                # Aponta para a imagem que acabámos de pushar
-                imageName="rodrig0salv/minha-app:latest" \
-                containerRegistryUrl='' \
-                containerRegistryUsername='' \
-                containerRegistryPassword='' \
-                storageAccountName="miniprojetostorage20" \
-                containerName="reddit-posts" \
-                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
-              --only-show-errors
-            echo "Web App deploy concluído: $DEPLOY_NAME"
-
+      # --- Deploy da Function App primeiro, para depois obter a URL ---
       - name: Deploy Function App em Python (Bicep com parâmetros)
         uses: azure/cli@v1
         with:
@@ -221,7 +196,7 @@ jobs:
               --parameters \
                 functionAppName="$FUNCTIONAPP_NAME" \
                 planName="ASP-MiniProjetoCloud2.0" \
-                storageAccountName="miniprojetostorage20" \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
                 cosmosAccountName="cosmosdbminiprojeto" \
                 cosmosDatabaseName="RedditApp" \
                 cosmosContainerName="posts" \
@@ -234,6 +209,57 @@ jobs:
               --only-show-errors
             echo "Function App deployment concluído."
 
+
+      - name: Obter master key da Function App
+        id: get_function_key
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
+            MASTER_KEY=$(az functionapp keys list \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --query "default" -o tsv)
+            if [ -z "$MASTER_KEY" ]; then
+              echo "Erro: não conseguiu obter master key da Function App."
+              exit 1
+            fi
+            echo "FUNCTION_KEY=$MASTER_KEY" >> $GITHUB_OUTPUT
+            echo "::set-output name=FUNCTION_KEY::$MASTER_KEY"
+
+      - name: Construir FUNCTION_URL_FULL
+        id: set_function_url
+        run: |
+          FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/SearchFunction?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
+          echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
+
+      # --- Agora deploy do Web App, passando a função URL e CORS se desejar ---
+      - name: Deploy Web App com Function URL e CORS
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            DEPLOY_NAME="deploy-webapp-$(date +%s)"
+            echo "Deploy Web App ($WEBAPP_NAME) via Bicep, incluindo FUNCTION_URL e CORS..."
+            az deployment group create \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
+              --template-file templates/web-app.bicep \
+              --parameters \
+                webAppName="$WEBAPP_NAME" \
+                planName="ASP-MiniProjetoCloud2.0" \
+                imageName="rodrig0salv/minha-app:latest" \
+                containerRegistryUrl="" \
+                containerRegistryUsername="" \
+                containerRegistryPassword="" \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                containerName="${CONTAINER_NAME}" \
+                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
+                functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
+                # Exemplo: envia allowedCorsOrigins como array JSON; ajuste conforme seu Bicep aceitar:
+                allowedCorsOrigins='["https://seusite.com", "https://outrosite.com"]' \
+              --only-show-errors
+            echo "Web App deployment concluído: $DEPLOY_NAME"
+
       - name: Instalar Azure Functions Core Tools
         run: |
           if ! command -v npm &>/dev/null; then
@@ -242,12 +268,10 @@ jobs:
           fi
           npm install -g azure-functions-core-tools@4 --unsafe-perm true
 
-      # --- Novos passos para garantir runtime e deploy das Functions ---
       - name: Configurar runtime Python no Function App
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "A definir app settings para runtime Python e remote build..."
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
@@ -256,7 +280,6 @@ jobs:
       - name: Debug - listar ficheiros e verificar estrutura da pasta das Functions
         run: |
           echo "Directório de trabalho atual: $(pwd)"
-          echo "Listar conteúdo do workspace:"
           ls -R .
           if [ -d "${AZURE_FUNCTIONAPP_PACKAGE_PATH}" ]; then
             echo "Estrutura em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
@@ -265,7 +288,6 @@ jobs:
             echo "Pasta ${AZURE_FUNCTIONAPP_PACKAGE_PATH} não existe! Abortando."
             exit 1
           fi
-          # Verifica existência de host.json e requirements.txt
           if [ ! -f "${AZURE_FUNCTIONAPP_PACKAGE_PATH}/host.json" ]; then
             echo "ERRO: não encontrei host.json em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
             exit 1
@@ -279,14 +301,9 @@ jobs:
         run: |
           echo "A empacotar código da Function App..."
           cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-
-          # Fallback: instalar dependências localmente e vendorizá-las, caso build remoto falhe
-          echo "Vendorizando dependências localmente..."
           mkdir -p .python_packages/lib/site-packages
           pip install --upgrade pip
           pip install -r requirements.txt --target .python_packages/lib/site-packages
-
-          # Gera zip com todo o conteúdo da pasta (host.json, pastas de funções, dependências vendorizadas, etc.)
           zip -r ../funcapp.zip .
           ls -lh ../funcapp.zip
 
@@ -294,51 +311,22 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "A efectuar Zip Deploy para Function App..."
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               --src "$GITHUB_WORKSPACE/funcapp.zip"
-            echo "Zip Deploy concluído."
-
-      - name: Obter master key da Function App e atualizar Web App
-        env:
-          RG: ${{ env.RG }}
-          FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
-          WEBAPP_NAME: ${{ env.WEBAPP_NAME }}
-        run: |
-          echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
-          MASTER_KEY=$(az functionapp keys list \
-            --resource-group "$RG" \
-            --name "$FUNCTIONAPP_NAME" \
-            --query "masterKey" -o tsv)
-          if [ -z "$MASTER_KEY" ]; then
-            echo "Erro: não conseguiu obter master key da Function App. Abortando atualização de FUNCTION_URL."
-            exit 1
-          fi
-          FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/SearchFunction?code=${MASTER_KEY}"
-          echo "FUNCTION_URL completa (com master key): $FUNCTION_URL_FULL"
-          az webapp config appsettings set \
-            --resource-group "$RG" \
-            --name "$WEBAPP_NAME" \
-            --settings FUNCTION_URL="$FUNCTION_URL_FULL"
-          echo "App Setting FUNCTION_URL atualizado na Web App '$WEBAPP_NAME'."
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "Reiniciando Web App '$WEBAPP_NAME'..."
             az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME"
-            echo "Reiniciando Function App '$FUNCTIONAPP_NAME'..."
             az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME"
-            echo "Reiniciado."
 
       - name: Mostrar outputs finais Web + Function
         uses: azure/cli@v1
         with:
           inlineScript: |
-            # Web App outputs
             DEPLOY_WEB_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-webapp-')]|[0].name" -o tsv)
             if [ -n "$DEPLOY_WEB_NAME" ]; then
               echo "Deployment Web App: $DEPLOY_WEB_NAME"
@@ -346,7 +334,6 @@ jobs:
             else
               echo "Não encontrou deployment Web App."
             fi
-            # Function App outputs
             DEPLOY_FUNC_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-funcapp-')]|[0].name" -o tsv)
             if [ -n "$DEPLOY_FUNC_NAME" ]; then
               echo "Deployment Function App: $DEPLOY_FUNC_NAME"
