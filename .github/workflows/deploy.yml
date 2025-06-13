@@ -189,23 +189,31 @@ jobs:
               --only-show-errors
             echo "Web App deploy concluído: $DEPLOY_NAME"
 
-      - name: Deploy Function App em Python (sem App Insights)
+      - name: Deploy Function App em Python (Bicep com parâmetros)
         uses: azure/cli@v1
         with:
           inlineScript: |
-            DEPLOY_NAME="deploy-funcapp-$(date +%s)"
-            echo "Deploy Function App ($FUNCTIONAPP_NAME) sem App Insights..."
+            echo "Deploy Function App ($FUNCTIONAPP_NAME)..."
             az deployment group create \
-              --name "$DEPLOY_NAME" \
+              --name "deploy-funcapp-$(date +%s)" \
               --resource-group "$RG" \
               --template-file templates/function-app.bicep \
               --parameters \
                 functionAppName="$FUNCTIONAPP_NAME" \
+                planName="ASP-MiniProjetoCloud2.0" \
                 storageAccountName="miniprojetostorage20" \
-                location="$TARGET_LOCATION" \
-                existingPlanResourceId="/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$RG/providers/Microsoft.Web/serverfarms/ASP-MiniProjetoCloud2.0" \
+                cosmosAccountName="cosmosdbminiprojeto" \
+                cosmosDatabaseName="RedditApp" \
+                cosmosContainerName="posts" \
+                redditUser="Major-Noise-6411" \
+                redditPassword="miniprojetocloud" \
+                secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" \
+                clientIdValue="bzG6zHjC23GSenSIXe0M-Q" \
+                translatorEndpoint="" \
+                translatorKey="" \
               --only-show-errors
-            echo "Function App deployment concluído: $DEPLOY_NAME"
+            echo "Function App deployment concluído."
+
 
       - name: Instalar Azure Functions Core Tools
         run: |
