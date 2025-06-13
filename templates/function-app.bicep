@@ -1,5 +1,3 @@
-// templates/function-app.bicep
-
 @description('Nome da Function App a ser criada ou atualizada')
 param functionAppName string
 
@@ -70,6 +68,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'Python|3.11'
+      // Adicionar CORS para permitir chamadas de https://portal.azure.com
+      cors: {
+        allowedOrigins: [
+          'https://portal.azure.com'
+        ]
+        // supportCredentials pode ser adicionado se for necessário enviar cookies/autenticação
+        // supportCredentials: false
+      }
       appSettings: [
         // Runtime
         {

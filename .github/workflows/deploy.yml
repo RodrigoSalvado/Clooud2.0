@@ -228,11 +228,11 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "A definir app settings para runtime Python..."
+            echo "A definir app settings para runtime Python e remote build..."
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
-              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1
+              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
       - name: Debug - listar ficheiros e verificar estrutura da pasta das Functions
         run: |
@@ -273,7 +273,7 @@ jobs:
               --src "$GITHUB_WORKSPACE/funcapp.zip"
             echo "Zip Deploy concluído."
 
-      # Poderias manter como alternativa o func azure functionapp publish, mas Zip Deploy é mais previsível.
+      # Poderias manter como alternativa o func azure functionapp publish, mas Zip Deploy com SCM_DO_BUILD_DURING_DEPLOYMENT=true já instala deps.
       # Se quiseres usar func Core Tools, inclui algo assim:
       # - name: Publicar Azure Function App com Remote Build (verbose)
       #   env:

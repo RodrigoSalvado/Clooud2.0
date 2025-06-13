@@ -176,7 +176,7 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
             continue
         title = d.get("title", "")
         # 1) Detecta idioma e traduz apenas se necessário
-        if TRANSLATOR_ENDPOINT or TRANSLATOR_KEY != "":
+        if TRANSLATOR_ENDPOINT and TRANSLATOR_KEY:
             lang = detect_language(title)
             if lang.lower().startswith('en'):
                 title_eng = title
