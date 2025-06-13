@@ -22,10 +22,8 @@ jobs:
       TARGET_LOCATION: 'francecentral'
       WEBAPP_NAME: 'minhaapp-rodrig0salv'
       AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
-      # Removidas variáveis do Translator
-      # TRANSLATOR_NAME: 'translator'
-      # TRANSLATOR_RG: 'MiniProjetoCloud2.0'
-      # Se usar plano existente, definir em secrets ou variável:
+      # Variáveis do Translator mantêm-se removidas
+      # Se precisares de FUNCTION_PLAN_RESOURCE_ID, define nos secrets ou como env var
       # FUNCTION_PLAN_RESOURCE_ID: '/subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/ASP-...'
 
     steps:
@@ -225,36 +223,67 @@ jobs:
           fi
           npm install -g azure-functions-core-tools@4 --unsafe-perm true
 
-      - name: Validar existência do diretório de Functions
+      # --- Novos passos para garantir runtime e deploy das Functions ---
+      - name: Configurar runtime Python no Function App
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "A definir app settings para runtime Python..."
+            az functionapp config appsettings set \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1
+
+      - name: Debug - listar ficheiros e verificar estrutura da pasta das Functions
         run: |
-          if [ ! -d "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}" ]; then
-            echo "Diretório ${AZURE_FUNCTIONAPP_PACKAGE_PATH} não existe. Abortando publicação de Functions."
+          echo "Directório de trabalho atual: $(pwd)"
+          echo "Listar conteúdo do workspace:"
+          ls -R .
+          if [ -d "${AZURE_FUNCTIONAPP_PACKAGE_PATH}" ]; then
+            echo "Estrutura em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
+            ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+          else
+            echo "Pasta ${AZURE_FUNCTIONAPP_PACKAGE_PATH} não existe! Abortando."
             exit 1
           fi
+          # Verifica existência de host.json e requirements.txt
+          if [ ! -f "${AZURE_FUNCTIONAPP_PACKAGE_PATH}/host.json" ]; then
+            echo "Aviso: não encontrei host.json em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+          fi
+          if [ ! -f "${AZURE_FUNCTIONAPP_PACKAGE_PATH}/requirements.txt" ]; then
+            echo "Aviso: não encontrei requirements.txt em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+          fi
 
-      - name: Instalar dependências Python da Function App localmente
+      - name: Empacotar código da Function App para Zip Deploy
         run: |
-          python3 -m venv .venv_func
-          source .venv_func/bin/activate
-          pip install --upgrade pip
-          pip install -r "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/requirements.txt"
+          echo "A empacotar código da Function App..."
+          cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+          # Gera zip com todo o conteúdo da pasta (host.json, pastas de funções, etc.)
+          zip -r ../funcapp.zip .
+          ls -lh ../funcapp.zip
 
-      - name: Publicar Azure Function App com Remote Build
-        env:
-          RG: ${{ env.RG }}
-          FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
-          AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc"
-        run: |
-          cd "$AZURE_FUNCTIONAPP_PACKAGE_PATH"
-          echo "Publicando Function App '$FUNCTIONAPP_NAME' em RG '$RG'..."
-          func azure functionapp publish "$FUNCTIONAPP_NAME" --python
+      - name: Deploy Function App via Zip Deploy
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "A efectuar Zip Deploy para Function App..."
+            az functionapp deployment source config-zip \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --src "$GITHUB_WORKSPACE/funcapp.zip"
+            echo "Zip Deploy concluído."
 
-      # Removido passo de criar/configurar Translator
-      # - name: Criar Translator Free em região suportada e configurar App Settings
-      #   uses: azure/cli@v1
-      #   with:
-      #     inlineScript: |
-      #       ...
+      # Poderias manter como alternativa o func azure functionapp publish, mas Zip Deploy é mais previsível.
+      # Se quiseres usar func Core Tools, inclui algo assim:
+      # - name: Publicar Azure Function App com Remote Build (verbose)
+      #   env:
+      #     RG: ${{ env.RG }}
+      #     FUNCTIONAPP_NAME: ${{ env.FUNCTIONAPP_NAME }}
+      #     AZURE_FUNCTIONAPP_PACKAGE_PATH: "./redditIngestFunc"
+      #   run: |
+      #     cd "$AZURE_FUNCTIONAPP_PACKAGE_PATH"
+      #     echo "Publicando Function App '$FUNCTIONAPP_NAME' com func Core Tools (remote build)..."
+      #     func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build remote --verbose
 
       - name: Obter master key da Function App e atualizar Web App
         env:
