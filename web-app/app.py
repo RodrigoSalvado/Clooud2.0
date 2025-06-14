@@ -20,8 +20,11 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 
 # Variáveis de ambiente esperadas
+# FUNCTION_URL: URL da Azure Function que ingere do Reddit e insere/atualiza no Cosmos, retorna lista de posts
 FUNCTION_URL = os.getenv("FUNCTION_URL")
+# GET_POSTS_FUNCTION_URL: URL da Azure Function que, dado ?ids=id1,id2,..., faz read do Cosmos e retorna {"posts": [...]}
 GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")
+# SAS do container para relatórios/gráficos
 CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")
 
 # Inicializar pipeline de análise de sentimento
@@ -34,31 +37,43 @@ except Exception as e:
     classifier = None
     candidate_labels = []
 
-def fetch_posts(subreddit, sort, limit):
+def fetch_and_ingest_posts(subreddit, sort, limit):
+    """
+    Chama a função de ingestão do Reddit (FUNCTION_URL), retorna lista de posts (cada post dict com 'id', 'subreddit', 'title', etc).
+    Essa função faz o upsert no Cosmos e devolve os dados recém-ingestados do Reddit.
+    """
     if not FUNCTION_URL:
-        flash("FUNCTION_URL não está configurado.", "danger")
-        logger.error("FUNCTION_URL ausente")
-        return None
-    try:
-        logger.info(f"fetch_posts: chamando FUNCTION_URL={FUNCTION_URL} com params subreddit={subreddit}, sort={sort}, limit={limit}")
-        resp = requests.get(
-            FUNCTION_URL,
-            params={"subreddit": subreddit, "sort": sort, "limit": limit},
-            timeout=30
-        )
-        logger.info(f"fetch_posts: status_code={resp.status_code}, texto_inicio={resp.text[:200]!r}")
-        resp.raise_for_status()
-        data = resp.json()
-        logger.info(f"fetch_posts: JSON recebido com chaves={list(data.keys())}")
-        return data.get("posts", data)
-    except Exception as e:
-        logger.error(f"Erro ao obter posts: {e}", exc_info=True)
-        flash(f"Erro ao obter posts: {e}", "danger")
-        return None
+        raise RuntimeError("FUNCTION_URL não está configurado")
+    resp = requests.get(
+        FUNCTION_URL,
+        params={"subreddit": subreddit, "sort": sort, "limit": limit},
+        timeout=30
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("posts", data)
+
+def get_posts_from_cosmos(ids: list[str]):
+    """
+    Chama GET_POSTS_FUNCTION_URL com query param 'ids', retorna lista de posts sanitizados do Cosmos.
+    Espera que a função responda {"posts": [...]}, onde cada elemento tem pelo menos id, subreddit, title, selftext, url.
+    """
+    if not GET_POSTS_FUNCTION_URL:
+        raise RuntimeError("GET_POSTS_FUNCTION_URL não está configurado")
+    if not ids:
+        return []
+    # Monta query param: ids comma-separated
+    ids_param = ",".join(ids)
+    resp = requests.get(GET_POSTS_FUNCTION_URL, params={"ids": ids_param}, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("posts", data)
 
 @app.route("/", methods=["GET"])
 def home():
-    session.clear()
+    # Ao entrar na home, limpamos sessão de pesquisas anteriores
+    session.pop("post_ids", None)
+    session.pop("search_params", None)
     return render_template("index.html", posts=None)
 
 @app.route("/search", methods=["GET"])
@@ -76,20 +91,45 @@ def search():
         flash("O campo 'Número de posts' deve ser um número inteiro.", "warning")
         return redirect(url_for("home"))
 
-    posts = fetch_posts(subreddit, sort, limit)
-    if posts is None:
+    # 1) Chama ingestão do Reddit → Cosmos
+    try:
+        posts = fetch_and_ingest_posts(subreddit, sort, limit)
+    except Exception as e:
+        logger.error(f"Erro ao obter/ingerir posts do Reddit: {e}", exc_info=True)
+        flash(f"Erro ao obter posts do Reddit: {e}", "danger")
         return redirect(url_for("home"))
 
-    # Armazenar no session para uso posterior
-    session["posts"] = posts
+    # 2) Extrai apenas os IDs
+    post_ids = []
+    for p in posts:
+        pid = p.get("id")
+        if pid:
+            post_ids.append(pid)
+    # Se nenhum ID, informar
+    if not post_ids:
+        flash("Nenhum post válido retornado da ingestão.", "warning")
+        return redirect(url_for("home"))
+
+    # 3) Armazena IDs e parâmetros de pesquisa na sessão
+    session["post_ids"] = post_ids
     session["search_params"] = {"subreddit": subreddit, "sort": sort, "limit": limit}
 
-    return render_template("index.html", posts=posts, subreddit=subreddit, sort=sort, limit=limit)
+    # 4) Buscar dados completos via Cosmos (GET_POSTS_FUNCTION_URL)
+    try:
+        cosmos_posts = get_posts_from_cosmos(post_ids)
+    except Exception as e:
+        logger.error(f"Erro ao buscar posts do Cosmos: {e}", exc_info=True)
+        flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
+        # Mesmo que falhe, podemos mostrar versão bruta do ingest (posts), mas ideal avisar
+        cosmos_posts = posts
+
+    # 5) Renderiza a página com os posts completos
+    return render_template("index.html", posts=cosmos_posts, subreddit=subreddit, sort=sort, limit=limit)
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
-    posts = session.get("posts")
-    if not posts:
+    post_ids = session.get("post_ids")
+    if not post_ids:
         flash("Nenhum post disponível para análise.", "warning")
         return redirect(url_for("home"))
 
@@ -97,13 +137,20 @@ def detail_all():
         flash("Pipeline de sentimento não está disponível.", "danger")
         return redirect(url_for("home"))
 
+    # 1) Obter dados do Cosmos para cada ID
+    try:
+        posts = get_posts_from_cosmos(post_ids)
+    except Exception as e:
+        logger.error(f"Erro ao buscar posts do Cosmos em detail_all: {e}", exc_info=True)
+        flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
+        return redirect(url_for("home"))
+
     analysed_posts = []
-    # Certifica-se de que a pasta static exista
     os.makedirs("static", exist_ok=True)
     text_accum = []
     neg_probs, neu_probs, pos_probs = [], [], []
 
-    # Analisar cada post
+    # Analisar sentimento em cada post
     for post in posts:
         input_text = post.get('selftext', '').strip() or post.get('title', '').strip()
         if not input_text:
@@ -118,7 +165,6 @@ def detail_all():
                 post['sentimento'] = top_label
                 post['probabilidade'] = int(sentiment['scores'][0] * 100)
                 post['scores_raw'] = scores
-                # Acumular para gráficos
                 neg_probs.append(scores.get("negative", 0) * 100)
                 neu_probs.append(scores.get("neutral", 0) * 100)
                 pos_probs.append(scores.get("positive", 0) * 100)
@@ -130,21 +176,16 @@ def detail_all():
                 post['scores_raw'] = {}
         analysed_posts.append(post)
 
-    # Inicializar variáveis de caminho de gráfico
+    # Geração de gráficos como antes...
     resumo_chart = None
     wc_chart = None
-
-    # Gerar gráfico de densidade apenas se tivermos ao menos 2 valores no total
+    # ... (mesmo código de KDE e WordCloud)
     try:
         total_values = neg_probs + neu_probs + pos_probs
-        if len(total_values) < 2:
-            logger.info("Dados insuficientes para KDE (menos de 2 elementos no total). Pulando geração de densidade.")
-        else:
+        if len(total_values) >= 2:
             x = np.linspace(0, 100, 500)
             plt.figure(figsize=(8, 4))
             plotted = False
-
-            # Para cada série, plotar apenas se houver mais de 1 valor e não todos zeros
             if len(neg_probs) > 1 and any(neg_probs):
                 try:
                     kde_neg = gaussian_kde(neg_probs)
@@ -175,7 +216,6 @@ def detail_all():
                     plotted = True
                 except Exception as e:
                     logger.warning("Falha ao gerar KDE para positivos: %s", e)
-
             if plotted:
                 plt.xlabel("Confiança da Análise (%)")
                 plt.ylabel("Distribuição Normalizada (%)")
@@ -184,20 +224,15 @@ def detail_all():
                 plt.tight_layout()
                 resumo_chart = "static/distribuicao_confianca.png"
                 plt.savefig(resumo_chart, dpi=200)
-            else:
-                logger.info("Nenhuma série de probabilidades adequada para plotar KDE. Pulando.")
             plt.close()
     except Exception as e:
         logger.error("Erro ao gerar gráfico de densidade: %s", e, exc_info=True)
 
-    # Gerar nuvem de palavras apenas se houver pelo menos 1 palavra após filtro de stopwords
     try:
         full_text = " ".join(text_accum).strip()
         words = re.findall(r"\w+", full_text)
         filtered_words = [w for w in words if w.lower() not in STOPWORDS]
-        if not filtered_words:
-            logger.info("Dados insuficientes para WordCloud (nenhuma palavra após filtro). Pulando geração de nuvem.")
-        else:
+        if filtered_words:
             wordcloud = WordCloud(width=700, height=350, background_color="white",
                                   stopwords=set(STOPWORDS)).generate(" ".join(filtered_words))
             plt.figure(figsize=(7, 3.5))
@@ -210,7 +245,6 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar wordcloud: %s", e, exc_info=True)
 
-    # Renderizar template passando os paths (ou None)
     return render_template(
         "detail_all.html",
         posts=analysed_posts,
@@ -220,14 +254,22 @@ def detail_all():
 
 @app.route("/gerar_relatorio", methods=["POST"])
 def gerar_relatorio():
-    posts = session.get("posts")
-    if not posts:
+    post_ids = session.get("post_ids")
+    if not post_ids:
         flash("Não há dados disponíveis para gerar relatório.", "warning")
         return redirect(url_for("home"))
 
     if not CONTAINER_ENDPOINT_SAS:
         logger.error("CONTAINER_ENDPOINT_SAS inválido ou ausente no gerar_relatorio.")
         flash("CONTAINER_ENDPOINT_SAS inválido ou ausente.", "danger")
+        return redirect(url_for("home"))
+
+    # 1) Buscar dados completos do Cosmos
+    try:
+        posts = get_posts_from_cosmos(post_ids)
+    except Exception as e:
+        logger.error(f"Erro ao buscar posts do Cosmos em gerar_relatorio: {e}", exc_info=True)
+        flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
         return redirect(url_for("home"))
 
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
@@ -299,6 +341,6 @@ def listar_ficheiros():
 
 if __name__ == "__main__":
     # Em produção, substitua app.run por servidor WSGI adequado
-    # Opcionalmente, logue valor de CONTAINER_ENDPOINT_SAS ao iniciar (somente para debug, cuidado com exposição em logs)
     logger.info(f"Valor de CONTAINER_ENDPOINT_SAS no startup: {CONTAINER_ENDPOINT_SAS}")
+    logger.info(f"Valor de GET_POSTS_FUNCTION_URL no startup: {GET_POSTS_FUNCTION_URL}")
     app.run(host="0.0.0.0", port=5000)

@@ -1,4 +1,4 @@
-name: Deploy Bicep Individualizado em France Central
+name: Deploy Bicep + Web App e Function App
 
 on:
   push:
@@ -43,30 +43,14 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      - name: (Re)Criar Resource Group em ${{ env.TARGET_LOCATION }}
+      - name: (Re)Criar Resource Group se não existir
         run: |
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
-            echo "Criando RG '$RG' em $TARGET_LOCATION..."
+            echo "Criando Resource Group '$RG' em $TARGET_LOCATION..."
             az group create --name "$RG" --location "$TARGET_LOCATION"
           else
-            CURRENT_LOCATION=$(echo "$EXISTE_RG_JSON" | jq -r '.location')
-            if [ "$CURRENT_LOCATION" != "$TARGET_LOCATION" ]; then
-              echo "RG '$RG' existe em $CURRENT_LOCATION e será recriado em $TARGET_LOCATION..."
-              az group delete --name "$RG" --yes --no-wait
-              echo "Aguardando remoção do RG..."
-              for i in {1..60}; do
-                if ! az group show --name "$RG" &>/dev/null; then
-                  echo "RG removido."
-                  break
-                fi
-                sleep 5
-              done
-              echo "Criando RG '$RG' em $TARGET_LOCATION..."
-              az group create --name "$RG" --location "$TARGET_LOCATION"
-            else
-              echo "RG '$RG' já existe em $TARGET_LOCATION. Continuando."
-            fi
+            echo "Resource Group '$RG' já existe em $TARGET_LOCATION. Continuando."
           fi
 
       - name: Validar templates Bicep localmente
@@ -84,7 +68,7 @@ jobs:
         with:
           inlineScript: |
             DEPLOY_NAME="deploy-storage-$(date +%s)"
-            echo "Deploy Storage Account: $DEPLOY_NAME"
+            echo "Deploy Storage Account via Bicep: $DEPLOY_NAME"
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
@@ -97,7 +81,7 @@ jobs:
               --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
-      - name: Deploy CosmosDB (pular se já existe)
+      - name: Deploy CosmosDB (se não existir)
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -121,7 +105,8 @@ jobs:
                   cosmosLocation="$TARGET_LOCATION" \
                   cosmosDatabaseName='RedditApp' \
                   cosmosContainerName='posts' \
-                  cosmosPartitionKeyPath='/id' \
+                  # Ajuste partitionKeyPath para '/subreddit' pois seu código usa partition_key=subreddit
+                  cosmosPartitionKeyPath='/subreddit' \
                   cosmosThroughput=${COSMOS_THROUGHPUT} \
                 --only-show-errors
               echo "Deploy Cosmos concluído: $DEPLOY_NAME"
@@ -154,16 +139,13 @@ jobs:
           inlineScript: |
             ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
             CONTAINER_NAME="${CONTAINER_NAME}"
-            # Gera token SAS com permissão de leitura, escrita e delete (para overwrite, se necessário)
-            EXPIRY=$(date -u -d "1 day" '+%Y-%m-%dT%H:%MZ')
-
-            # 1) Obter account key da Storage Account
+            # Gera token SAS com permissão de leitura, escrita, delete etc.
+            # Ajuste validade para 30 dias (pode aumentar ou automatizar rotação conforme política)
+            EXPIRY=$(date -u -d "30 days" '+%Y-%m-%dT%H:%MZ')
             ACCOUNT_KEY=$(az storage account keys list \
               --account-name "$ACCOUNT_NAME" \
               --resource-group "$RG" \
               --query "[0].value" -o tsv)
-
-            # 2) Gerar SAS usando a account key, garantindo que inclua permissões raclwd
             sasToken=$(az storage container generate-sas \
               --account-name "$ACCOUNT_NAME" \
               --account-key "$ACCOUNT_KEY" \
@@ -172,18 +154,14 @@ jobs:
               --expiry "$EXPIRY" \
               --https-only \
               -o tsv)
-
-            # 3) Montar endpoint completo do container com SAS
             blobEndpoint=$(az storage account show \
               --name "$ACCOUNT_NAME" \
               --query "primaryEndpoints.blob" -o tsv)
-            blobEndpoint=${blobEndpoint%/}   # remove possível barra final
-
+            blobEndpoint=${blobEndpoint%/}
             fullSasUrl="${blobEndpoint}/${CONTAINER_NAME}?${sasToken}"
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
             echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
-
-            # DEBUG: exibir no log para verificação
+            # DEBUG:
             echo "DEBUG: fullSasUrl = $fullSasUrl"
 
       - name: Login Docker Hub
@@ -215,13 +193,13 @@ jobs:
                 functionAppName="$FUNCTIONAPP_NAME" \
                 planName="ASP-MiniProjetoCloud2.0" \
                 storageAccountName="${STORAGE_ACCOUNT_NAME}" \
-                cosmosAccountName="cosmosdbminiprojeto" \
+                cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
                 cosmosDatabaseName="RedditApp" \
                 cosmosContainerName="posts" \
-                redditUser="Major-Noise-6411" \
-                redditPassword="miniprojetocloud" \
-                secretValue="DoywW0Lcc26rvDforDKkLOSQsUUwYA" \
-                clientIdValue="bzG6zHjC23GSenSIXe0M-Q" \
+                redditUser="${{ secrets.REDDIT_USER }}" \
+                redditPassword="${{ secrets.REDDIT_PASSWORD }}" \
+                clientIdValue="${{ secrets.CLIENT_ID }}" \
+                secretValue="${{ secrets.CLIENT_SECRET }}" \
                 translatorEndpoint="" \
                 translatorKey="" \
               --only-show-errors
@@ -229,19 +207,30 @@ jobs:
 
       - name: Empacotar código da Function App para Zip Deploy
         run: |
-          echo "A empacotar código da Function App..."
+          echo "Empacotando código das Azure Functions..."
           cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-          mkdir -p .python_packages/lib/site-packages
-          pip install --upgrade pip
-          pip install -r requirements.txt --target .python_packages/lib/site-packages
+          # Assumindo que:
+          # - host.json está nesta pasta
+          # - pastas SearchFunction/, GetPostsFunction/ estão presentes
+          # - requirements.txt está na raiz aqui
+          # Vamos usar instalação de dependências no Azure, então não vendorar localmente.
+          # (Opcionalmente, com vendoring, você criaria .python_packages e pip install -r requirements.txt --target .python_packages/lib/site-packages)
+          # Mas aqui deixamos que o Azure instale do requirements.txt, então apenas criamos zip com código fonte.
           zip -r ../funcapp.zip .
-          ls -lh ../funcapp.zip
+          echo "Conteúdo do zip:"
+          unzip -l ../funcapp.zip
 
       - name: Deploy Function App via Zip Deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
             echo "Deploy Function App ($FUNCTIONAPP_NAME) via Zip Deploy..."
+            # Usa run-from-package para Python:
+            az functionapp config appsettings set \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              --only-show-errors
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
@@ -249,11 +238,12 @@ jobs:
               --only-show-errors
             echo "Zip Deploy da Function concluído."
 
-      - name: Obter master key da Function App
-        id: get_function_key
+      - name: Aguardar indexação e obter master key da Function App
         uses: azure/cli@v1
         with:
           inlineScript: |
+            echo "Aguardando alguns segundos para indexação das funções..."
+            sleep 15
             echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
             MASTER_KEY=$(az functionapp keys list \
               --resource-group "$RG" \
@@ -268,31 +258,36 @@ jobs:
       - name: Construir FUNCTION URLs
         id: set_function_url
         run: |
-          # Rota definida no function.json: "route": "search"
+          # As rotas definidas em function.json devem ser "route": "search" e "route": "getposts"
+          echo "Montando URLs das funções..."
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
-          echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
-
-          # Rota definida no function.json: "route": "getposts"
           GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
+          echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
           echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
+          echo "DEBUG: FUNCTION_URL_FULL = $FUNCTION_URL_FULL"
+          echo "DEBUG: GET_POSTS_FUNCTION_URL = $GET_POSTS_FUNCTION_URL"
 
       - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS
         uses: azure/cli@v1
         with:
           inlineScript: |
             SAS_FULL="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}"
+            FUNCTION_URL_FULL="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}"
+            GET_POSTS_FUNCTION_URL="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}"
             echo "DEBUG: SAS_FULL para deploy do Web App: $SAS_FULL"
-
-            # Definir explicitamente a App Setting antes do deploy Bicep (opcional para garantir)
-            echo "Definindo App Setting CONTAINER_ENDPOINT_SAS via CLI antes do deploy Bicep..."
+            echo "DEBUG: FUNCTION_URL_FULL: $FUNCTION_URL_FULL"
+            echo "DEBUG: GET_POSTS_FUNCTION_URL: $GET_POSTS_FUNCTION_URL"
+            # Define App Settings no Web App:
             az webapp config appsettings set \
               --resource-group "$RG" \
               --name "$WEBAPP_NAME" \
-              --settings CONTAINER_ENDPOINT_SAS="$SAS_FULL" \
+              --settings \
+                CONTAINER_ENDPOINT_SAS="$SAS_FULL" \
+                FUNCTION_URL="$FUNCTION_URL_FULL" \
+                GET_POSTS_FUNCTION_URL="$GET_POSTS_FUNCTION_URL" \
               --only-show-errors
-            echo "App Setting CONTAINER_ENDPOINT_SAS definida."
-
-            echo "Agora deploy via Bicep (incluindo FUNCTION_URL, containerSasToken e containerEndpointSas)..."
+            # Deploy via Bicep do Web App (imagem Docker), incluindo referências:
+            echo "Iniciando deploy Web App ($WEBAPP_NAME) via Bicep..."
             az deployment group create \
               --name "deploy-webapp-$(date +%s)" \
               --resource-group "$RG" \
@@ -301,57 +296,35 @@ jobs:
                 webAppName="$WEBAPP_NAME" \
                 planName="ASP-MiniProjetoCloud2.0" \
                 imageName="rodrig0salv/minha-app:latest" \
+                # Se precisar de Container Registry credenciais, ajuste; se imagem pública, pode deixar vazio:
                 containerRegistryUrl="" \
                 containerRegistryUsername="" \
                 containerRegistryPassword="" \
                 storageAccountName="${STORAGE_ACCOUNT_NAME}" \
                 containerName="${CONTAINER_NAME}" \
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
-                functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
-                functionGetPostsUrl="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}" \
+                functionUrl="$FUNCTION_URL_FULL" \
+                functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
                 containerEndpointSas="$SAS_FULL" \
               --only-show-errors
             echo "Web App deployment concluído."
-
-      - name: Configurar runtime Python no Function App
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            az functionapp config appsettings set \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-              --only-show-errors
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
+            echo "Reiniciando Web App e Function App..."
             az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME" --only-show-errors
             az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --only-show-errors
 
-      - name: Mostrar outputs finais Web + Function
+      - name: Mostrar outputs finais Web + Function e App Settings
         uses: azure/cli@v1
         with:
           inlineScript: |
-            DEPLOY_WEB_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-webapp-')]|[0].name" -o tsv)
-            if [ -n "$DEPLOY_WEB_NAME" ]; then
-              echo "Deployment Web App: $DEPLOY_NAME"
-              az deployment group show --resource-group "$RG" --name "$DEPLOY_WEB_NAME" --query properties.outputs
-            else
-              echo "Não encontrou deployment Web App."
-            fi
-            DEPLOY_FUNC_NAME=$(az deployment group list --resource-group "$RG" --query "[?starts_with(name,'deploy-funcapp-')]|[0].name" -o tsv)
-            if [ -n "$DEPLOY_FUNC_NAME" ]; then
-              echo "Deployment Function App: $DEPLOY_NAME"
-              az deployment group show --resource-group "$RG" --name "$DEPLOY_FUNC_NAME" --query properties.outputs
-            else
-              echo "Não encontrou deployment Function App."
-            fi
-
-      - name: Verificar App Settings do Web App
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            echo "App Settings de $WEBAPP_NAME após deploy:"
+            echo "=== App Settings do Web App após deploy ==="
             az webapp config appsettings list --resource-group "$RG" --name "$WEBAPP_NAME" -o table
+            echo "=== App Settings do Function App após deploy ==="
+            az functionapp config appsettings list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" -o table
+            echo "=== Funções disponíveis na Function App ==="
+            func azure functionapp list-functions "$FUNCTIONAPP_NAME" --resource-group "$RG"
+
