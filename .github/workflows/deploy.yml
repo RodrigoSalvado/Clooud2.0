@@ -14,6 +14,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    # Variáveis de ambiente gerais. Ajusta conforme o teu projeto.
     env:
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
@@ -21,6 +22,7 @@ jobs:
       RG: 'MiniProjetoCloud2.0'
       TARGET_LOCATION: 'francecentral'
       WEBAPP_NAME: 'minhaapp-rodrig0salv'
+      # Caminho para a pasta onde estão as Azure Functions (com host.json, requirements.txt, SearchFunction/, GetPostsFunction/)
       AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
       STORAGE_ACCOUNT_NAME: 'miniprojetostorage20'
       CONTAINER_NAME: 'reddit-posts'
@@ -36,7 +38,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Instalar jq (no runner)
+      - name: Instalar jq (no runner) para JSON parsing
         run: |
           if ! command -v jq &>/dev/null; then
             sudo apt-get update
@@ -45,6 +47,7 @@ jobs:
 
       - name: (Re)Criar Resource Group se não existir
         run: |
+          echo "Verificando existence do Resource Group $RG..."
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
             echo "Criando Resource Group '$RG' em $TARGET_LOCATION..."
@@ -56,14 +59,16 @@ jobs:
       - name: Validar templates Bicep localmente
         run: |
           az bicep install || true
+          echo "Validando e compilando templates Bicep:"
           az bicep build --file templates/resource-group.bicep
           az bicep build --file templates/storage-account.bicep
           az bicep build --file templates/cosmosdb.bicep
           az bicep build --file templates/app-service-plan.bicep
-          az bicep build --file templates/web-app.bicep
           az bicep build --file templates/function-app.bicep
+          az bicep build --file templates/web-app.bicep
+          echo "Templates Bicep compilados com sucesso."
 
-      - name: Deploy Storage Account + Container
+      - name: Deploy Storage Account + Container via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -81,7 +86,7 @@ jobs:
               --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
-      - name: Deploy CosmosDB (se não existir)
+      - name: Deploy CosmosDB (se não existir) via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -105,19 +110,19 @@ jobs:
                   cosmosLocation="$TARGET_LOCATION" \
                   cosmosDatabaseName='RedditApp' \
                   cosmosContainerName='posts' \
-                  # Ajuste partitionKeyPath para '/subreddit' pois seu código usa partition_key=subreddit
+                  # Ajuste partitionKeyPath conforme teu código (ex: '/subreddit')
                   cosmosPartitionKeyPath='/subreddit' \
                   cosmosThroughput=${COSMOS_THROUGHPUT} \
                 --only-show-errors
               echo "Deploy Cosmos concluído: $DEPLOY_NAME"
             fi
 
-      - name: Deploy App Service Plan para Web App
+      - name: Deploy App Service Plan para Web App via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
             DEPLOY_NAME="deploy-asp-web-$(date +%s)"
-            echo "Deploy App Service Plan: $DEPLOY_NAME"
+            echo "Deploy App Service Plan via Bicep: $DEPLOY_NAME"
             az deployment group create \
               --name "$DEPLOY_NAME" \
               --resource-group "$RG" \
@@ -139,8 +144,8 @@ jobs:
           inlineScript: |
             ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
             CONTAINER_NAME="${CONTAINER_NAME}"
-            # Gera token SAS com permissão de leitura, escrita, delete etc.
-            # Ajuste validade para 30 dias (pode aumentar ou automatizar rotação conforme política)
+            echo "Gerando SAS token para o container ${CONTAINER_NAME} na Storage Account ${ACCOUNT_NAME}..."
+            # Ajusta validade conforme política (ex: 30 dias)
             EXPIRY=$(date -u -d "30 days" '+%Y-%m-%dT%H:%MZ')
             ACCOUNT_KEY=$(az storage account keys list \
               --account-name "$ACCOUNT_NAME" \
@@ -161,7 +166,6 @@ jobs:
             fullSasUrl="${blobEndpoint}/${CONTAINER_NAME}?${sasToken}"
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
             echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
-            # DEBUG:
             echo "DEBUG: fullSasUrl = $fullSasUrl"
 
       - name: Login Docker Hub
@@ -196,6 +200,7 @@ jobs:
                 cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
                 cosmosDatabaseName="RedditApp" \
                 cosmosContainerName="posts" \
+                # Usa segredos para Reddit/Credentials
                 redditUser="${{ secrets.REDDIT_USER }}" \
                 redditPassword="${{ secrets.REDDIT_PASSWORD }}" \
                 clientIdValue="${{ secrets.CLIENT_ID }}" \
@@ -205,38 +210,47 @@ jobs:
               --only-show-errors
             echo "Function App deployment via Bicep concluído."
 
+      - name: Debug - listar conteúdo redditIngestFunc antes do zip
+        run: |
+          echo "PWD: $(pwd)"
+          echo "Conteúdo raiz do repositório:"
+          ls -R .
+          echo "Conteúdo de ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
+          ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+
       - name: Empacotar código da Function App para Zip Deploy
         run: |
-          echo "Empacotando código das Azure Functions..."
+          echo "Empacotando código das Azure Functions em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}..."
           cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-          # Assumindo que:
-          # - host.json está nesta pasta
-          # - pastas SearchFunction/, GetPostsFunction/ estão presentes
-          # - requirements.txt está na raiz aqui
-          # Vamos usar instalação de dependências no Azure, então não vendorar localmente.
-          # (Opcionalmente, com vendoring, você criaria .python_packages e pip install -r requirements.txt --target .python_packages/lib/site-packages)
-          # Mas aqui deixamos que o Azure instale do requirements.txt, então apenas criamos zip com código fonte.
+          echo "Listando antes do zip:"
+          ls -R .
+          echo "Zipando..."
           zip -r ../funcapp.zip .
-          echo "Conteúdo do zip:"
+          echo "Listando conteúdo do zip:"
           unzip -l ../funcapp.zip
 
       - name: Deploy Function App via Zip Deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "Deploy Function App ($FUNCTIONAPP_NAME) via Zip Deploy..."
-            # Usa run-from-package para Python:
+            echo "Configurando runtime e deploy das Functions..."
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
               --only-show-errors
+
+            echo "Deploying ZIP package to Function App..."
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               --src "$GITHUB_WORKSPACE/funcapp.zip" \
               --only-show-errors
-            echo "Zip Deploy da Function concluído."
+
+            echo "Aguardando indexação das funções..."
+            sleep 20
+            echo "Funções publicadas na Function App:"
+            func azure functionapp list-functions "$FUNCTIONAPP_NAME" --resource-group "$RG"
 
       - name: Aguardar indexação e obter master key da Function App
         uses: azure/cli@v1
@@ -258,7 +272,6 @@ jobs:
       - name: Construir FUNCTION URLs
         id: set_function_url
         run: |
-          # As rotas definidas em function.json devem ser "route": "search" e "route": "getposts"
           echo "Montando URLs das funções..."
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
           GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
@@ -267,7 +280,7 @@ jobs:
           echo "DEBUG: FUNCTION_URL_FULL = $FUNCTION_URL_FULL"
           echo "DEBUG: GET_POSTS_FUNCTION_URL = $GET_POSTS_FUNCTION_URL"
 
-      - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS
+      - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS via CLI + Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -286,7 +299,7 @@ jobs:
                 FUNCTION_URL="$FUNCTION_URL_FULL" \
                 GET_POSTS_FUNCTION_URL="$GET_POSTS_FUNCTION_URL" \
               --only-show-errors
-            # Deploy via Bicep do Web App (imagem Docker), incluindo referências:
+
             echo "Iniciando deploy Web App ($WEBAPP_NAME) via Bicep..."
             az deployment group create \
               --name "deploy-webapp-$(date +%s)" \
@@ -296,7 +309,6 @@ jobs:
                 webAppName="$WEBAPP_NAME" \
                 planName="ASP-MiniProjetoCloud2.0" \
                 imageName="rodrig0salv/minha-app:latest" \
-                # Se precisar de Container Registry credenciais, ajuste; se imagem pública, pode deixar vazio:
                 containerRegistryUrl="" \
                 containerRegistryUsername="" \
                 containerRegistryPassword="" \
