@@ -206,7 +206,7 @@ jobs:
                 translatorKey=""
             echo "Function App deployment via Bicep concluído."
 
-      - name: Debug: listar conteúdo redditIngestFunc antes do zip
+      - name: Debug - listar conteúdo redditIngestFunc antes do zip
         run: |
           echo "PWD: $(pwd)"
           echo "Conteúdo raiz do repositório:"
