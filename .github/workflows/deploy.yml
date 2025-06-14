@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Ajusta estes valores conforme teu ambiente
+      # Ajuste estes valores conforme teu ambiente
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
@@ -51,7 +51,7 @@ jobs:
 
       - name: (Re)Criar Resource Group se não existir
         run: |
-          echo "Verificando existence do Resource Group $RG..."
+          echo "Verificando existência do Resource Group $RG..."
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
             echo "Criando Resource Group '$RG' em $TARGET_LOCATION..."
@@ -86,7 +86,8 @@ jobs:
                 storageAccountName="${STORAGE_ACCOUNT_NAME}" \
                 containerName="${CONTAINER_NAME}" \
                 enableBlobVersioning=true \
-                blobSoftDeleteDays=7
+                blobSoftDeleteDays=7 \
+              --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
       - name: Deploy CosmosDB (se não existir) via Bicep
@@ -113,7 +114,8 @@ jobs:
                   cosmosDatabaseName='RedditApp' \
                   cosmosContainerName='posts' \
                   cosmosPartitionKeyPath='/subreddit' \
-                  cosmosThroughput=${COSMOS_THROUGHPUT}
+                  cosmosThroughput=${COSMOS_THROUGHPUT} \
+                --only-show-errors
               echo "Deploy Cosmos concluído: $DEPLOY_NAME"
             fi
 
@@ -133,7 +135,8 @@ jobs:
                 skuName='B2' \
                 capacity=1 \
                 isLinux=true \
-                location="$TARGET_LOCATION"
+                location="$TARGET_LOCATION" \
+              --only-show-errors
             echo "App Service Plan deploy concluído: $DEPLOY_NAME"
 
       - name: Gerar SAS token e CONTAINER_ENDPOINT_SAS completo
@@ -203,7 +206,8 @@ jobs:
                 clientIdValue="${CLIENT_ID}" \
                 secretValue="${CLIENT_SECRET}" \
                 translatorEndpoint="" \
-                translatorKey=""
+                translatorKey="" \
+              --only-show-errors
             echo "Function App deployment via Bicep concluído."
 
       - name: Debug - listar conteúdo redditIngestFunc antes do zip
@@ -233,7 +237,20 @@ jobs:
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
-              --settings FUNCTIONS_WORKER_RUNTIME=python WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true
+              --settings \
+                FUNCTIONS_WORKER_RUNTIME=python \
+                FUNCTIONS_EXTENSION_VERSION="~4" \
+                # Aqui você poderia definir também COSMOS_ENDPOINT, COSMOS_KEY etc. se não feito pelo Bicep:
+                # COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
+                # COSMOS_KEY="<sua-chave-cosmos>" \
+                # COSMOS_DATABASE="RedditApp" \
+                # COSMOS_CONTAINER="posts" \
+                # REDDIT_USER="${REDDIT_USER}" \
+                # REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
+                # CLIENT_ID="${CLIENT_ID}" \
+                # SECRET="${CLIENT_SECRET}" \
+                WEBSITE_RUN_FROM_PACKAGE=1 \
+                SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
@@ -243,8 +260,11 @@ jobs:
 
             echo "Aguardando indexação das funções..."
             sleep 20
-            echo "Funções publicadas na Function App:"
-            func azure functionapp list-functions "$FUNCTIONAPP_NAME" --resource-group "$RG"
+            echo "Funções publicadas na Function App (via Azure CLI):"
+            az functionapp function list \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              -o table
 
       - name: Aguardar indexação e obter master key da Function App
         uses: azure/cli@v1
@@ -310,7 +330,8 @@ jobs:
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="$FUNCTION_URL_FULL" \
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
-                containerEndpointSas="$SAS_FULL"
+                containerEndpointSas="$SAS_FULL" \
+              --only-show-errors
             echo "Web App deployment concluído."
 
       - name: Reiniciar Web App e Function App após deploy
@@ -318,8 +339,8 @@ jobs:
         with:
           inlineScript: |
             echo "Reiniciando Web App e Function App..."
-            az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME"
-            az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME"
+            az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME" --only-show-errors
+            az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --only-show-errors
 
       - name: Mostrar outputs finais Web + Function e App Settings
         uses: azure/cli@v1
@@ -330,7 +351,8 @@ jobs:
             echo "=== App Settings do Function App após deploy ==="
             az functionapp config appsettings list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" -o table
             echo "=== Funções disponíveis na Function App ==="
-            func azure functionapp list-functions "$FUNCTIONAPP_NAME" --resource-group "$RG"
+            az functionapp function list \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              -o table
 
-
-            
