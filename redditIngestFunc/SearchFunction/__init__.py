@@ -116,8 +116,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "subreddit": p.get("subreddit"),
             "title": p.get("title"),
             "selftext": p.get("selftext"),
-            "url": p.get("url"),
-            "score": p.get("score")
+            "url": p.get("url")
         })
 
     body = json.dumps({"posts": sanitized}, ensure_ascii=False)
@@ -174,8 +173,7 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
             "subreddit": subreddit,
             "title":     title,
             "selftext":  d.get("selftext", ""),
-            "url":       d.get("url", ""),
-            "score":     d.get("score", 0)
+            "url":       d.get("url", "")
         }
         cont.upsert_item(item)
         logger.info(f"Upserted item: {item['id']}")

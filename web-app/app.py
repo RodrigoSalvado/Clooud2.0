@@ -21,6 +21,7 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 
 # Variáveis de ambiente esperadas
 FUNCTION_URL = os.getenv("FUNCTION_URL")
+GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")
 CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")
 
 # Inicializar pipeline de análise de sentimento
@@ -295,35 +296,6 @@ def listar_ficheiros():
         flash(f"Erro ao listar ficheiros: {e}", "danger")
         return redirect(url_for("home"))
 
-# Rota de teste de upload via SAS, para verificar se CONTAINER_ENDPOINT_SAS funciona
-@app.route("/test_upload", methods=["GET"])
-def test_upload():
-    # Usa a variável CONTAINER_ENDPOINT_SAS para criar um blob de teste
-    if not CONTAINER_ENDPOINT_SAS:
-        return "CONTAINER_ENDPOINT_SAS não definido", 500
-
-    # Nome do blob de teste
-    blob_name = f"flask_test_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
-    content = "Teste de upload via SAS no Flask em " + datetime.utcnow().isoformat()
-
-    # Montar URL de destino
-    parts = CONTAINER_ENDPOINT_SAS.split("?", 1)
-    if len(parts) != 2:
-        return f"Formato inválido de CONTAINER_ENDPOINT_SAS: {CONTAINER_ENDPOINT_SAS}", 500
-    base_url, sas_token = parts
-    blob_url = f"{base_url}/{blob_name}?{sas_token}"
-    logger.info(f"Tentando upload de teste para: {blob_url}")
-
-    try:
-        client = BlobClient.from_blob_url(blob_url)
-        client.upload_blob(content.encode("utf-8"), overwrite=True, content_settings=ContentSettings(
-            content_type="text/plain",
-            content_disposition="inline"
-        ))
-        return f"Upload de teste bem-sucedido: {blob_name}", 200
-    except Exception as e:
-        logger.error("Erro no upload de teste: %s", e, exc_info=True)
-        return f"Erro no upload de teste: {e}", 500
 
 if __name__ == "__main__":
     # Em produção, substitua app.run por servidor WSGI adequado

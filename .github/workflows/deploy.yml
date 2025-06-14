@@ -265,12 +265,16 @@ jobs:
             fi
             echo "FUNCTION_KEY=$MASTER_KEY" >> $GITHUB_OUTPUT
 
-      - name: Construir FUNCTION_URL_FULL
+      - name: Construir FUNCTION URLs
         id: set_function_url
         run: |
           # Rota definida no function.json: "route": "search"
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
+
+          # Rota definida no function.json: "route": "getposts"
+          GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
+          echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
 
       - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS
         uses: azure/cli@v1
@@ -304,6 +308,7 @@ jobs:
                 containerName="${CONTAINER_NAME}" \
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}" \
+                functionGetPostsUrl="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}" \
                 containerEndpointSas="$SAS_FULL" \
               --only-show-errors
             echo "Web App deployment concluído."

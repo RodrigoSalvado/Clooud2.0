@@ -31,6 +31,10 @@ param containerEndpointSas string = ''
 @description('URL completa da Function (com chave) para app setting FUNCTION_URL. Se vazio, não adiciona.')
 param functionUrl string = ''
 
+@description('URL completa da Function (com chave) para app setting GET_POSTS_FUNCTION_URL. Se vazio, não adiciona.')
+param functionGetPostsUrl string = ''
+
+
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
 var addContainerSas = containerSasToken != ''
@@ -93,6 +97,10 @@ var functionUrlSettings array = addFunctionUrl ? [
   {
     name: 'FUNCTION_URL'
     value: functionUrl
+  }
+  {
+    name: 'GET_POSTS_FUNCTION_URL'
+    value: functionGetPostsUrl
   }
 ] : []
 
