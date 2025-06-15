@@ -1,4 +1,3 @@
-<!-- templates/detail_all.html -->
 <!DOCTYPE html>
 <html lang="pt">
 <head>
@@ -12,7 +11,7 @@
 
     <!-- Blocos de contagem de sentimentos -->
     <div class="row text-center mb-4">
-      <div class="col-md-4 mb-2">
+      <div class="col-md-4">
         <div class="card border-success">
           <div class="card-body">
             <h5 class="card-title text-success">Positivos</h5>
@@ -22,7 +21,7 @@
           </div>
         </div>
       </div>
-      <div class="col-md-4 mb-2">
+      <div class="col-md-4">
         <div class="card border-warning">
           <div class="card-body">
             <h5 class="card-title text-warning">Neutros</h5>
@@ -32,7 +31,7 @@
           </div>
         </div>
       </div>
-      <div class="col-md-4 mb-2">
+      <div class="col-md-4">
         <div class="card border-danger">
           <div class="card-body">
             <h5 class="card-title text-danger">Negativos</h5>
@@ -47,26 +46,24 @@
     <!-- Lista de posts -->
     <div class="mb-5">
       <h4>Lista de Posts Analisados</h4>
-      {% if posts|length == 0 %}
-        <div class="alert alert-info">Nenhum post disponível para análise.</div>
+      {% if posts %}
+      <ul class="list-group">
+        {% for post in posts %}
+          <li class="list-group-item">
+            <h6>{{ post.title }}</h6>
+            <p>
+              <strong>Sentimento:</strong> {{ post.sentimento or 'Unknown' }}
+              |
+              <strong>Confiança:</strong> {{ post.probabilidade or 0 }}%
+            </p>
+            {% if post.url %}
+              <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
       {% else %}
-        <ul class="list-group">
-          {% for post in posts %}
-            <li class="list-group-item">
-              <h6>{{ post.title }}</h6>
-              <p class="mb-1">
-                <strong>Sentimento:</strong> {{ post.sentimento }}
-                |
-                <strong>Confiança:</strong> {{ post.probabilidade }}%
-              </p>
-              {% if post.url %}
-                <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
-              {% elif post.permalink %}
-                <a href="https://reddit.com{{ post.permalink }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
-              {% endif %}
-            </li>
-          {% endfor %}
-        </ul>
+      <div class="alert alert-info">Nenhum post disponível para análise.</div>
       {% endif %}
     </div>
 
@@ -74,10 +71,9 @@
     <div class="mb-5">
       <h4>Distribuição da Confiança por Sentimento</h4>
       {% if resumo_chart %}
-        {% set fname = resumo_chart.split('static/')[-1] %}
-        <img src="{{ url_for('static', filename=fname) }}"
+        <img src="{{ url_for('static', filename=resumo_chart.split('static/')[-1]) }}"
              class="img-fluid"
-             alt="Densidade de confiança">
+             alt="Densidade">
       {% else %}
         <p class="text-muted">Dados insuficientes para exibir gráfico de densidade.</p>
       {% endif %}
@@ -87,8 +83,7 @@
     <div class="mb-5">
       <h4>Nuvem de Palavras</h4>
       {% if wc_chart %}
-        {% set fname_wc = wc_chart.split('static/')[-1] %}
-        <img src="{{ url_for('static', filename=fname_wc) }}"
+        <img src="{{ url_for('static', filename=wc_chart.split('static/')[-1]) }}"
              class="img-fluid"
              alt="Nuvem de Palavras">
       {% else %}
@@ -99,17 +94,16 @@
     <!-- Botão para gerar relatório -->
     <div class="mb-4 text-end">
       <form action="{{ url_for('gerar_relatorio') }}" method="post">
-        <button type="submit" class="btn btn-outline-dark">📄 Gerar Relatório CSV</button>
+        <button type="submit" class="btn btn-outline-dark mb-4">📄 Gerar Relatório CSV</button>
       </form>
     </div>
 
-    <!-- Link voltar à pesquisa, se existirem parâmetros em session -->
-    {% set sp = session.get('search_params') %}
-    {% if sp and sp.subreddit %}
+    <!-- Link voltar à pesquisa -->
+    {% if session.search_params is defined and session.search_params.subreddit %}
       <a href="{{ url_for('search',
-                          subreddit=sp['subreddit'],
-                          sort=sp['sort'],
-                          limit=sp['limit']) }}"
+                          subreddit=session.search_params.subreddit,
+                          sort=session.search_params.sort,
+                          limit=session.search_params.limit) }}"
          class="btn btn-secondary">← Voltar à Pesquisa</a>
     {% else %}
       <a href="{{ url_for('home') }}" class="btn btn-secondary">← Voltar</a>

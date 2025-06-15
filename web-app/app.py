@@ -20,10 +20,18 @@ app = Flask(__name__)
 # Use uma variável de ambiente para a chave secreta; em dev, cai no padrão “dev_secret_key”
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 
+# Se necessário, ajustar explicitamente:
+# Em dev local (HTTP), garanta que SESSION_COOKIE_SECURE=False
+app.config["SESSION_COOKIE_SECURE"] = False
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# Em produção HTTPS, poderia ser:
+# app.config["SESSION_COOKIE_SECURE"] = True
+# app.config["SESSION_COOKIE_SAMESITE"] = "None"
+
 # Variáveis de ambiente esperadas
-FUNCTION_URL = os.getenv("FUNCTION_URL")  # ex: https://<sua-func>.azurewebsites.net/api/search?code=...
-GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")  # ex: https://<sua-func>.azurewebsites.net/api/getposts?code=...
-CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")  # ex: https://<storage>.blob.core.windows.net/<container>?<sas>
+FUNCTION_URL = os.getenv("FUNCTION_URL")        # e.g. https://<sua-func>.azurewebsites.net/api/search?code=...
+GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")  # e.g. https://<sua-func>.azurewebsites.net/api/getposts?code=...
+CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")  # e.g. https://<storage>.blob.core.windows.net/<container>?<sas>
 
 # Inicializar pipeline de análise de sentimento (zero-shot)
 try:
@@ -65,7 +73,7 @@ def fetch_and_ingest_posts(subreddit: str, sort: str, limit: int):
 def get_posts_from_cosmos(ids: list[str]):
     """
     Chama a Azure Function GET_POSTS com query param "ids=id1,id2,...", retorna lista de posts do Cosmos.
-    Espera que a resposta JSON seja {"posts": [...]}. 
+    Espera que a resposta JSON seja {"posts": [...]}.
     """
     if not GET_POSTS_FUNCTION_URL:
         raise RuntimeError("GET_POSTS_FUNCTION_URL não está configurado")
@@ -133,15 +141,15 @@ def search():
         flash("Nenhum post válido retornado da ingestão.", "warning")
         return redirect(url_for("home"))
 
-    # Salva na sessão
+    # 3) Salva na sessão
     session["post_ids"] = post_ids
     session["search_params"] = {"subreddit": subreddit, "sort": sort, "limit": limit}
+    logger.info(f"[SEARCH] session['post_ids'] salvo, total {len(post_ids)} IDs")
 
-    # 3) Buscar dados completos via Cosmos
+    # 4) Buscar dados completos via Cosmos
     try:
         cosmos_posts = get_posts_from_cosmos(post_ids)
-        logger.info(f"[SEARCH] get_posts_from_cosmos retornou tipo {type(cosmos_posts)}, len={len(cosmos_posts)}")
-        # Se veio lista vazia do Cosmos, podemos usar fallback para posts brutos (ou continuar com vazio, conforme sua lógica)
+        logger.info(f"[SEARCH] get_posts_from_cosmos retornou len={len(cosmos_posts)}")
         if isinstance(cosmos_posts, list) and not cosmos_posts:
             logger.warning("[SEARCH] get_posts_from_cosmos retornou lista vazia; usando posts brutos como fallback")
             cosmos_posts = posts
@@ -150,28 +158,29 @@ def search():
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
         cosmos_posts = posts  # fallback
 
-    # 4) Renderiza template com posts (pode ser lista vazia)
-    return render_template("index.html", posts=cosmos_posts, subreddit=subreddit, sort=sort, limit=limit)
+    # 5) Renderiza template com posts
+    return render_template("index.html",
+                           posts=cosmos_posts,
+                           subreddit=subreddit,
+                           sort=sort,
+                           limit=limit)
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
-    # Tenta obter IDs do form primeiro (caso queira análise baseada em parâmetros do form)
-    # Os nomes hidden inputs em index.html devem ser name="ids[]" (ou "ids") conforme template.
-    ids_form = []
-    # Flask request.form.getlist deve usar a chave exatamente como nome no HTML:
-    # Se o input for <input name="ids[]" ...>, a chave será 'ids[]'
+    # Tentar ler IDs vindos do form (caso o form inclua hidden inputs name="ids[]")
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
         logger.info(f"[DETAIL_ALL] Usando IDs vindos do form: {post_ids}")
-        # opcionalmente, atualizar a sessão para uso futuro
+        # Atualiza a sessão também
         session["post_ids"] = post_ids
     else:
-        # fallback para session
+        # Fallback para sessão
         post_ids = session.get("post_ids", [])
-        logger.info(f"[DETAIL_ALL] IDs vindos da sessão: {post_ids}")
+        logger.info(f"[DETAIL_ALL] Usando IDs vindos da sessão: {post_ids}")
 
     if not post_ids:
+        logger.warning("[DETAIL_ALL] Nenhum post disponível para análise (post_ids vazio).")
         flash("Nenhum post disponível para análise.", "warning")
         return redirect(url_for("home"))
 
@@ -182,6 +191,7 @@ def detail_all():
     # 1) Obter dados do Cosmos para cada ID
     try:
         posts = get_posts_from_cosmos(post_ids)
+        logger.info(f"[DETAIL_ALL] get_posts_from_cosmos retornou len={len(posts)}")
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos em detail_all: {e}", exc_info=True)
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
@@ -287,6 +297,7 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar wordcloud: %s", e, exc_info=True)
 
+    logger.info(f"[DETAIL_ALL] Análise concluída para {len(analysed_posts)} posts, renderizando template")
     return render_template(
         "detail_all.html",
         posts=analysed_posts,

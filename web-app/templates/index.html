@@ -73,13 +73,6 @@
                 {{ post.title }}
               {% endif %}
             </div>
-            {# Se quiser botões individuais para cada post, pode habilitar: #}
-            {# 
-            <form method="post" action="{{ url_for('detail_all') }}" class="m-0">
-              <input type="hidden" name="ids[]" value="{{ post.id }}">
-              <button type="submit" class="btn btn-sm btn-secondary">Analisar este</button>
-            </form>
-            #}
           </li>
           {% endfor %}
         </ul>
