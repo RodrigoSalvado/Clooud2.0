@@ -240,7 +240,7 @@ jobs:
               --settings \
                 FUNCTIONS_WORKER_RUNTIME=python \
                 FUNCTIONS_EXTENSION_VERSION="~4" \
-                # Aqui você poderia definir também COSMOS_ENDPOINT, COSMOS_KEY etc. se não feito pelo Bicep:
+                # Se desejar, defina variáveis de ambiente específicas aqui:
                 # COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
                 # COSMOS_KEY="<sua-chave-cosmos>" \
                 # COSMOS_DATABASE="RedditApp" \
@@ -267,6 +267,7 @@ jobs:
               -o table
 
       - name: Aguardar indexação e obter master key da Function App
+        id: get_function_key
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -287,8 +288,12 @@ jobs:
         id: set_function_url
         run: |
           echo "Montando URLs das funções..."
-          FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
-          GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
+          FUNCTION_KEY="${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
+          if [ -z "$FUNCTION_KEY" ]; then
+            echo "WARNING: FUNCTION_KEY está vazio!"
+          fi
+          FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${FUNCTION_KEY}"
+          GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${FUNCTION_KEY}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
           echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
           echo "DEBUG: FUNCTION_URL_FULL = $FUNCTION_URL_FULL"
@@ -304,6 +309,10 @@ jobs:
             echo "DEBUG: SAS_FULL para deploy do Web App: $SAS_FULL"
             echo "DEBUG: FUNCTION_URL_FULL: $FUNCTION_URL_FULL"
             echo "DEBUG: GET_POSTS_FUNCTION_URL: $GET_POSTS_FUNCTION_URL"
+            if [ -z "$FUNCTION_URL_FULL" ] || [ -z "$GET_POSTS_FUNCTION_URL" ]; then
+              echo "ERRO: As URLs das functions estão vazias. Verifique a etapa anterior."
+              exit 1
+            fi
             # Define App Settings no Web App:
             az webapp config appsettings set \
               --resource-group "$RG" \
@@ -355,4 +364,3 @@ jobs:
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               -o table
-
