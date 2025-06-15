@@ -3,39 +3,53 @@
 <head>
   <meta charset="UTF-8">
   <title>Análise Completa</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
   <div class="container mt-4">
     <h1 class="mb-4">Análise de Sentimento (Todos os Posts)</h1>
 
+    <!-- Se houver mensagens flash, exibe -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fechar"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
     <!-- Blocos de contagem de sentimentos -->
     <div class="row text-center mb-4">
-      <div class="col-md-4">
-        <div class="card border-success">
+      <div class="col-md-4 mb-2">
+        <div class="card border-success h-100">
           <div class="card-body">
             <h5 class="card-title text-success">Positivos</h5>
-            <p class="display-6">
+            <p class="display-6 mb-0">
               {{ posts | selectattr('sentimento', 'equalto', 'Positive') | list | length }}
             </p>
           </div>
         </div>
       </div>
-      <div class="col-md-4">
-        <div class="card border-warning">
+      <div class="col-md-4 mb-2">
+        <div class="card border-warning h-100">
           <div class="card-body">
             <h5 class="card-title text-warning">Neutros</h5>
-            <p class="display-6">
+            <p class="display-6 mb-0">
               {{ posts | selectattr('sentimento', 'equalto', 'Neutral') | list | length }}
             </p>
           </div>
         </div>
       </div>
-      <div class="col-md-4">
-        <div class="card border-danger">
+      <div class="col-md-4 mb-2">
+        <div class="card border-danger h-100">
           <div class="card-body">
             <h5 class="card-title text-danger">Negativos</h5>
-            <p class="display-6">
+            <p class="display-6 mb-0">
               {{ posts | selectattr('sentimento', 'equalto', 'Negative') | list | length }}
             </p>
           </div>
@@ -47,23 +61,43 @@
     <div class="mb-5">
       <h4>Lista de Posts Analisados</h4>
       {% if posts %}
-      <ul class="list-group">
-        {% for post in posts %}
-          <li class="list-group-item">
-            <h6>{{ post.title }}</h6>
-            <p>
-              <strong>Sentimento:</strong> {{ post.sentimento or 'Unknown' }}
-              |
-              <strong>Confiança:</strong> {{ post.probabilidade or 0 }}%
-            </p>
-            {% if post.url %}
-              <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
+        <ul class="list-group">
+          {% for post in posts %}
+            <li class="list-group-item">
+              <div class="d-flex w-100 justify-content-between align-items-start">
+                <div class="me-2">
+                  <h6 class="mb-1">{{ post.title or '(Sem título)' }}</h6>
+                  <!-- Exibe full_id se existir -->
+                  {% if post.full_id %}
+                    <small class="text-muted">ID: {{ post.full_id }}</small><br>
+                  {% endif %}
+                  <!-- Exibe data, autor etc, se disponíveis -->
+                  {% if post.created_utc %}
+                    {% set dt = post.created_utc %}
+                    <!-- Caso created_utc seja timestamp, ajuste no backend ou aqui (exemplo simplificado assume string já legível) -->
+                    <small class="text-muted">Criado em: {{ dt }}</small><br>
+                  {% endif %}
+                </div>
+                <span class="badge 
+                             {% if post.sentimento == 'Positive' %}bg-success
+                             {% elif post.sentimento == 'Neutral' %}bg-warning text-dark
+                             {% elif post.sentimento == 'Negative' %}bg-danger
+                             {% else %}bg-secondary{% endif %} 
+                             rounded-pill">
+                  {{ post.sentimento or 'Unknown' }}
+                </span>
+              </div>
+              <p class="mt-2 mb-1">
+                <strong>Confiança:</strong> {{ post.probabilidade or 0 }}%
+              </p>
+              {% if post.url %}
+                <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
       {% else %}
-      <div class="alert alert-info">Nenhum post disponível para análise.</div>
+        <div class="alert alert-info">Nenhum post disponível para análise.</div>
       {% endif %}
     </div>
 
@@ -71,9 +105,10 @@
     <div class="mb-5">
       <h4>Distribuição da Confiança por Sentimento</h4>
       {% if resumo_chart %}
+        {# resumo_chart deve ser o caminho relativo, ex: "static/distribuicao_confianca.png" ou apenas "distribuicao_confianca.png" #}
         <img src="{{ url_for('static', filename=resumo_chart.split('static/')[-1]) }}"
-             class="img-fluid"
-             alt="Densidade">
+             class="img-fluid border"
+             alt="Densidade de confiança">
       {% else %}
         <p class="text-muted">Dados insuficientes para exibir gráfico de densidade.</p>
       {% endif %}
@@ -84,7 +119,7 @@
       <h4>Nuvem de Palavras</h4>
       {% if wc_chart %}
         <img src="{{ url_for('static', filename=wc_chart.split('static/')[-1]) }}"
-             class="img-fluid"
+             class="img-fluid border"
              alt="Nuvem de Palavras">
       {% else %}
         <p class="text-muted">Não foi possível gerar nuvem de palavras.</p>
@@ -94,22 +129,28 @@
     <!-- Botão para gerar relatório -->
     <div class="mb-4 text-end">
       <form action="{{ url_for('gerar_relatorio') }}" method="post">
-        <button type="submit" class="btn btn-outline-dark mb-4">📄 Gerar Relatório CSV</button>
+        <button type="submit" class="btn btn-outline-dark">
+          📄 Gerar Relatório CSV
+        </button>
       </form>
     </div>
 
     <!-- Link voltar à pesquisa -->
-    {% if session.search_params is defined and session.search_params.subreddit %}
-      <a href="{{ url_for('search',
-                          subreddit=session.search_params.subreddit,
-                          sort=session.search_params.sort,
-                          limit=session.search_params.limit) }}"
-         class="btn btn-secondary">← Voltar à Pesquisa</a>
-    {% else %}
-      <a href="{{ url_for('home') }}" class="btn btn-secondary">← Voltar</a>
-    {% endif %}
+    <div class="mb-5">
+      {% if session.search_params is defined and session.search_params.subreddit %}
+        <a href="{{ url_for('search',
+                            subreddit=session.search_params.subreddit,
+                            sort=session.search_params.sort,
+                            limit=session.search_params.limit) }}"
+           class="btn btn-secondary">← Voltar à Pesquisa</a>
+      {% else %}
+        <a href="{{ url_for('home') }}" class="btn btn-secondary">← Voltar</a>
+      {% endif %}
+    </div>
 
   </div>
+
+  <!-- Bootstrap JS Bundle -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

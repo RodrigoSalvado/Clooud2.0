@@ -20,8 +20,7 @@ app = Flask(__name__)
 # Use uma variável de ambiente para a chave secreta; em dev, cai no padrão “dev_secret_key”
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 
-# Se necessário, ajustar explicitamente:
-# Em dev local (HTTP), garanta que SESSION_COOKIE_SECURE=False
+# Sessão cookie config
 app.config["SESSION_COOKIE_SECURE"] = False
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 # Em produção HTTPS, poderia ser:
@@ -130,41 +129,63 @@ def search():
         flash(f"Erro ao obter posts do Reddit: {e}", "danger")
         return redirect(url_for("home"))
 
-    # 2) Extrai IDs válidos
+    # 2) Extrai IDs válidos, montando <subreddit>_<raw_id>
     post_ids = []
+    # Também queremos armazenar, em cada post bruto, uma chave 'full_id' para usar no template
+    posts_with_full = []
     if isinstance(posts, list):
         for p in posts:
-            if isinstance(p, dict) and p.get("id"):
-                post_ids.append(p.get("id"))
+            raw_id = p.get("id")
+            if isinstance(p, dict) and raw_id:
+                full_id = f"{subreddit}_{raw_id}"
+                post_ids.append(full_id)
+                # adicionar campo full_id ao post para possível uso no template:
+                p_copy = p.copy()
+                p_copy['full_id'] = full_id
+                posts_with_full.append(p_copy)
     if not post_ids:
         logger.warning("[SEARCH] Nenhum post com campo 'id' retornado pela ingestão.")
         flash("Nenhum post válido retornado da ingestão.", "warning")
         return redirect(url_for("home"))
 
     # 3) Salva na sessão, adicionando log dos IDs
-    # Exibe todos ou parte (se for muuuuito grande, você pode truncar)
     max_show = 20
     if len(post_ids) > max_show:
         logger.info(f"[SEARCH] IDs a armazenar na sessão (mostrando apenas os {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
     else:
         logger.info(f"[SEARCH] IDs a armazenar na sessão: {post_ids}")
-    session["post_ids"] = post_ids  # ADICIONADO LOG antes desta linha
+    session["post_ids"] = post_ids
     session["search_params"] = {"subreddit": subreddit, "sort": sort, "limit": limit}
     logger.info(f"[SEARCH] session['post_ids'] salvo, total {len(post_ids)} IDs")
 
-    # 4) Buscar dados completos via Cosmos
+    # 4) Buscar dados completos via Cosmos usando os IDs completos
     try:
         cosmos_posts = get_posts_from_cosmos(post_ids)
         logger.info(f"[SEARCH] get_posts_from_cosmos retornou len={len(cosmos_posts)}")
         if isinstance(cosmos_posts, list) and not cosmos_posts:
             logger.warning("[SEARCH] get_posts_from_cosmos retornou lista vazia; usando posts brutos como fallback")
-            cosmos_posts = posts
+            # Aqui, posts brutos têm apenas 'id'; já temos posts_with_full com 'full_id'
+            # Mas note: se o template precisar do full_id, use posts_with_full
+            cosmos_posts = posts_with_full
+        else:
+            # Se vier do Cosmos, certifique-se de que cada item retornado também contenha 'full_id' ou 'id' no formato esperado.
+            # Supondo que no Cosmos o documento já foi salvo com id = full_id, e retorna campo 'id' igual a esse full_id:
+            # podemos mapear para 'full_id' também:
+            new_list = []
+            for doc in cosmos_posts:
+                d = doc.copy()
+                # se o campo 'id' já é "<subreddit>_<raw_id>", registramos:
+                if 'id' in d:
+                    d['full_id'] = d['id']
+                new_list.append(d)
+            cosmos_posts = new_list
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos: {e}", exc_info=True)
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
-        cosmos_posts = posts  # fallback
+        cosmos_posts = posts_with_full  # fallback
 
     # 5) Renderiza template com posts
+    # No template index.html, ao iterar posts, use post.full_id para inputs
     return render_template("index.html",
                            posts=cosmos_posts,
                            subreddit=subreddit,
@@ -173,7 +194,7 @@ def search():
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
-    # Tentar ler IDs vindos do form (caso o form inclua hidden inputs name="ids[]")
+    # Tentar ler IDs vindos do form: espera que o template tenha usado post.full_id como value
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
@@ -206,13 +227,45 @@ def detail_all():
         flash("Pipeline de sentimento não está disponível.", "danger")
         return redirect(url_for("home"))
 
-    # 1) Obter dados do Cosmos para cada ID
+    # 1) Obter dados do Cosmos para cada ID completo
     try:
         posts = get_posts_from_cosmos(post_ids)
         logger.info(f"[DETAIL_ALL] get_posts_from_cosmos retornou len={len(posts)}")
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos em detail_all: {e}", exc_info=True)
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
+        return redirect(url_for("home"))
+
+    # 2) Se não encontrou nada no Cosmos, faz fallback usando posts brutos:
+    if not posts:
+        logger.warning("[DETAIL_ALL] get_posts_from_cosmos retornou vazio; tentando usar posts brutos para análise.")
+        params = session.get("search_params", {})
+        subreddit = params.get("subreddit")
+        sort = params.get("sort")
+        limit = params.get("limit")
+        raw_posts = []
+        if subreddit and limit:
+            try:
+                raw = fetch_and_ingest_posts(subreddit, sort, limit)
+                # Montar lista filtrada: comparar full_id esperado
+                filtered = []
+                for p in raw:
+                    raw_id = p.get("id")
+                    if raw_id:
+                        full_id = f"{subreddit}_{raw_id}"
+                        if full_id in post_ids:
+                            p_copy = p.copy()
+                            p_copy['full_id'] = full_id
+                            filtered.append(p_copy)
+                raw_posts = filtered
+                logger.info(f"[DETAIL_ALL] posts brutos filtrados para análise: {len(raw_posts)}")
+            except Exception as e:
+                logger.error(f"[DETAIL_ALL] falha ao re-buscar posts brutos: {e}", exc_info=True)
+        posts = raw_posts
+
+    if not posts:
+        logger.warning("[DETAIL_ALL] Ainda não há posts para analisar (nem no Cosmos nem no fallback).")
+        flash("Não há posts disponíveis para análise de sentimento.", "warning")
         return redirect(url_for("home"))
 
     analysed_posts = []
