@@ -219,31 +219,55 @@ jobs:
                 WEBSITE_RUN_FROM_PACKAGE=1 \
                 CONTAINER_ENDPOINT_SAS="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true
-
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               --src "$GITHUB_WORKSPACE/funcapp.zip" \
               --only-show-errors
+            az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --only-show-errors
 
       - name: Aguardar indexação e obter master key da Function App
         id: get_function_key
         uses: azure/cli@v1
         with:
           inlineScript: |
-            az extension show --name azure-functions &>/dev/null || az extension add --name azure-functions
-            # Verifica se a Function App existe e está running
-            az functionapp show --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "state" -o tsv
-            # Aguarda um pouco mais
+            echo "Aguardando Function App iniciar..."
+            # Primeiro, espera um pouco fixo
             sleep 30
-            # Debug: tenta listar sem query, só para ver JSON
-            az functionapp keys list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --output json
-            MASTER_KEY=$(az functionapp keys list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "masterKey" -o tsv)
+
+            # Verifica repetidamente se a Function App está em estado Running e tenta listar a key
+            MAX_RETRIES=5
+            SLEEP_SECONDS=20
+            attempt=1
+            MASTER_KEY=""
+            while [ $attempt -le $MAX_RETRIES ]; do
+              echo "Tentativa $attempt de $MAX_RETRIES: verificando estado da Function App..."
+              state=$(az functionapp show --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "state" -o tsv 2>/dev/null)
+              echo "State retornado: '$state'"
+              if [ "$state" = "Running" ]; then
+                echo "Function App está Running; tentando listar master key..."
+                # Tenta listar host keys
+                MASTER_KEY=$(az functionapp keys list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "masterKey" -o tsv 2>/dev/null || echo "")
+                if [ -n "$MASTER_KEY" ]; then
+                  echo "Master key obtida com sucesso."
+                  break
+                else
+                  echo "Não conseguiu obter master key nesta tentativa."
+                fi
+              else
+                echo "Function App não está Running ainda."
+              fi
+              attempt=$((attempt+1))
+              echo "Aguardando $SLEEP_SECONDS segundos antes da próxima tentativa..."
+              sleep $SLEEP_SECONDS
+            done
+
             if [ -z "$MASTER_KEY" ]; then
-              echo "Erro: não conseguiu obter master key da Function App."
+              echo "Erro: não conseguiu obter master key da Function App após $MAX_RETRIES tentativas."
               exit 1
             fi
             echo "FUNCTION_KEY=$MASTER_KEY" >> $GITHUB_OUTPUT
+
 
       - name: Construir FUNCTION URLs
         id: set_function_url
