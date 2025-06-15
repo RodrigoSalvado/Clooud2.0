@@ -62,24 +62,15 @@
         <!-- Lista de posts -->
         <ul class="list-group mt-4">
           {% for post in posts %}
-          <li class="list-group-item d-flex justify-content-between align-items-start">
-            <div class="me-2">
-              {# Ajuste conforme a estrutura de post: post.url e post.title ou permalink #}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <div>
               {% if post.url %}
-                <a href="{{ post.url }}" target="_blank">{{ post.title or '(Sem título)' }}</a>
+                <a href="{{ post.url }}" target="_blank">{{ post.title }}</a>
               {% elif post.permalink %}
-                <a href="https://reddit.com{{ post.permalink }}" target="_blank">{{ post.title or '(Sem título)' }}</a>
+                <a href="https://reddit.com{{ post.permalink }}" target="_blank">{{ post.title }}</a>
               {% else %}
-                {{ post.title or '(Sem título)' }}
+                {{ post.title }}
               {% endif %}
-              {# Exibe full_id para referência, se disponível #}
-              {% if post.full_id %}
-                <br><small class="text-muted">ID completo: {{ post.full_id }}</small>
-              {% endif %}
-            </div>
-            <div class="badge bg-secondary rounded-pill">
-              {# Opcional: exibir sentimento preliminar ou outro badge; aqui apenas placeholder #}
-              <!-- Ex.: {{ post.sentimento or '' }} -->
             </div>
           </li>
           {% endfor %}
@@ -88,13 +79,8 @@
         <!-- Botão para análise completa de todos os posts -->
         <form method="post" action="{{ url_for('detail_all') }}" class="mt-3">
           {% for post in posts %}
-            {# Envia full_id em vez de apenas post.id #}
-            {% if post.full_id %}
-              <input type="hidden" name="ids[]" value="{{ post.full_id }}">
-            {% else %}
-              {# Se full_id não estiver disponível, cai em post.id (mas idealmente setar full_id no backend) #}
-              <input type="hidden" name="ids[]" value="{{ post.id }}">
-            {% endif %}
+            {# Usar o campo full_id que o backend definiu em cada post #}
+            <input type="hidden" name="ids[]" value="{{ post.full_id or post.id }}">
           {% endfor %}
           <button type="submit" class="btn btn-success">Análise de Sentimento (Completo)</button>
         </form>

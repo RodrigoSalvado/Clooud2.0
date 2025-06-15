@@ -258,48 +258,70 @@ def detail_all():
     text_accum = []
     neg_probs, neu_probs, pos_probs = [], [], []
 
-    # Analisar sentimento em cada post
-    for post in posts:
-        input_text = post.get('selftext', '').strip() or post.get('title', '').strip()
-        if not input_text:
+    # ===== Modificação: processamento em lote (batch) =====
+    # Prepara lista de snippets e índices para mapear resultados
+    texts = []
+    posts_index = []  # índices em 'posts' que têm texto a analisar
+    for idx, post in enumerate(posts):
+        snippet = post.get('selftext', '').strip() or post.get('title', '').strip()
+        if snippet:
+            # Trunca para não exceder limite de tokens
+            if len(snippet) > 512:
+                snippet = snippet[:512]
+            texts.append(snippet)
+            posts_index.append(idx)
+        else:
+            # marca posts sem texto
             post['sentimento'] = 'Unknown'
             post['probabilidade'] = 0
             post['scores_raw'] = {}
-        else:
-            try:
-                # Usando sentiment-analysis padrão, que retorna algo como [{'label':'NEGATIVE','score':0.99}]
-                # Trunca input_text se muito longo (os modelos têm limite de tokens)
-                snippet = input_text
-                # Opcional: truncar para, ex., primeiros 512 caracteres
-                if len(snippet) > 512:
-                    snippet = snippet[:512]
-                result = classifier(snippet)
-                if isinstance(result, list) and result:
-                    label = result[0].get('label', '').capitalize()
-                    score = result[0].get('score', 0.0)
-                    post['sentimento'] = label
-                    post['probabilidade'] = int(score * 100)
-                    # Como não temos scores para neutral separado, deixamos scores_raw simples
-                    post['scores_raw'] = {label.lower(): score}
-                    # Distribuição aproximada: se quiser, podemos colocar 100-score como outro, mas deixamos simples
-                    if label.lower() == 'negative':
-                        neg_probs.append(score * 100)
-                    elif label.lower() == 'positive':
-                        pos_probs.append(score * 100)
+            analysed_posts.append(post)
+
+    # Processa em batches
+    batch_size = 16  # ajuste conforme memória/dispositivo
+    for start in range(0, len(texts), batch_size):
+        batch_texts = texts[start:start+batch_size]
+        # chamar o modelo em lote
+        try:
+            results = classifier(batch_texts, truncation=True)
+            # results é lista de dicts [{'label':..., 'score':...}, ...]
+        except Exception as e:
+            logger.error(f"Erro no batch de sentimento: {e}", exc_info=True)
+            # fallback: processar individualmente
+            results = []
+            for txt in batch_texts:
+                try:
+                    res = classifier(txt)
+                    if isinstance(res, list) and res:
+                        results.append(res[0])
                     else:
-                        # Alguns pipelines retornam 'NEUTRAL'; então:
-                        neu_probs.append(score * 100)
-                    text_accum.append(input_text)
-                else:
-                    post['sentimento'] = 'Unknown'
-                    post['probabilidade'] = 0
-                    post['scores_raw'] = {}
-            except Exception as e:
-                logger.error(f"Erro ao analisar sentimento do post '{post.get('title')[:30]}...': {e}", exc_info=True)
-                post['sentimento'] = 'Error'
-                post['probabilidade'] = 0
-                post['scores_raw'] = {}
-        analysed_posts.append(post)
+                        results.append({})
+                except Exception as e2:
+                    logger.error(f"Fallback erro individual: {e2}", exc_info=True)
+                    results.append({})
+
+        # Mapeia resultados de volta aos posts
+        for j, res in enumerate(results):
+            post_idx = posts_index[start + j]
+            post = posts[post_idx]
+            label = res.get('label', '') or ''
+            score = res.get('score', 0.0)
+            label_lower = label.lower() if isinstance(label, str) else ''
+            label_cap = label.capitalize() if isinstance(label, str) else 'Unknown'
+            post['sentimento'] = label_cap
+            post['probabilidade'] = int(score * 100)
+            post['scores_raw'] = {label_lower: score} if label_lower else {}
+            # preencher listas para gráfico KDE
+            if label_lower == 'negative':
+                neg_probs.append(score * 100)
+            elif label_lower == 'positive':
+                pos_probs.append(score * 100)
+            else:
+                neu_probs.append(score * 100)
+            text_accum.append(texts[start + j])
+            analysed_posts.append(post)
+
+    # ===== Fim modificação =====
 
     # Geração de gráfico de densidade (KDE)
     resumo_chart = None

@@ -74,8 +74,11 @@
                   <!-- Exibe data, autor etc, se disponíveis -->
                   {% if post.created_utc %}
                     {% set dt = post.created_utc %}
-                    <!-- Caso created_utc seja timestamp, ajuste no backend ou aqui (exemplo simplificado assume string já legível) -->
+                    <!-- Se for timestamp numérico, converta no backend antes -->
                     <small class="text-muted">Criado em: {{ dt }}</small><br>
+                  {% endif %}
+                  {% if post.author %}
+                    <small class="text-muted">Autor: {{ post.author }}</small><br>
                   {% endif %}
                 </div>
                 <span class="badge 
@@ -105,7 +108,7 @@
     <div class="mb-5">
       <h4>Distribuição da Confiança por Sentimento</h4>
       {% if resumo_chart %}
-        {# resumo_chart deve ser o caminho relativo, ex: "static/distribuicao_confianca.png" ou apenas "distribuicao_confianca.png" #}
+        {# resumo_chart deve ser caminho relativo: "static/nome.png" ou apenas "nome.png" #}
         <img src="{{ url_for('static', filename=resumo_chart.split('static/')[-1]) }}"
              class="img-fluid border"
              alt="Densidade de confiança">
