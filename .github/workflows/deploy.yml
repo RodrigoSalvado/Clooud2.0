@@ -302,8 +302,6 @@ jobs:
           echo "DEBUG: GET_POSTS_FUNCTION_URL = $GET_POSTS_FUNCTION_URL"
           echo "DEBUG: REPORT_FUNCTION_URL = $REPORT_FUNCTION_URL"
 
-          
-
       - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS via CLI + Bicep
         uses: azure/cli@v1
         with:
@@ -312,23 +310,14 @@ jobs:
             FUNCTION_URL_FULL="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}"
             GET_POSTS_FUNCTION_URL="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}"
             REPORT_FUNCTION_URL="${{ steps.set_function_url.outputs.REPORT_FUNCTION_URL }}"
-            echo "DEBUG: SAS_FULL para deploy do Web App: $SAS_FULL"
-            echo "DEBUG: FUNCTION_URL_FULL: $FUNCTION_URL_FULL"
-            echo "DEBUG: GET_POSTS_FUNCTION_URL: $GET_POSTS_FUNCTION_URL"
-            if [ -z "$FUNCTION_URL_FULL" ] || [ -z "$GET_POSTS_FUNCTION_URL" ]; then
-              echo "ERRO: As URLs das functions estão vazias. Verifique a etapa anterior."
-              exit 1
-            fi
-            # Define App Settings no Web App:
             az webapp config appsettings set \
               --resource-group "$RG" \
               --name "$WEBAPP_NAME" \
               --settings \
                 CONTAINER_ENDPOINT_SAS="$SAS_FULL" \
                 FUNCTION_URL="$FUNCTION_URL_FULL" \
-                GET_POSTS_FUNCTION_URL="$GET_POSTS_FUNCTION_URL"
-
-            echo "Iniciando deploy Web App ($WEBAPP_NAME) via Bicep..."
+                GET_POSTS_FUNCTION_URL="$GET_POSTS_FUNCTION_URL" \
+                functionGenerateReport="$REPORT_FUNCTION_URL"
             az deployment group create \
               --name "deploy-webapp-$(date +%s)" \
               --resource-group "$RG" \
@@ -345,7 +334,7 @@ jobs:
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="$FUNCTION_URL_FULL" \
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
-                functionGenerateReport="$REPORT_FUNCTION_URL"
+                functionGenerateReport="$REPORT_FUNCTION_URL" \
                 containerEndpointSas="$SAS_FULL" \
               --only-show-errors
             echo "Web App deployment concluído."
