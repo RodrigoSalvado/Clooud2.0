@@ -231,13 +231,14 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "Aguardando indexação final das funções..."
-            sleep 15
-            echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
-            MASTER_KEY=$(az functionapp keys list \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --query "masterKey" -o tsv)
+            az extension show --name azure-functions &>/dev/null || az extension add --name azure-functions
+            # Verifica se a Function App existe e está running
+            az functionapp show --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "state" -o tsv
+            # Aguarda um pouco mais
+            sleep 30
+            # Debug: tenta listar sem query, só para ver JSON
+            az functionapp keys list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --output json
+            MASTER_KEY=$(az functionapp keys list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "masterKey" -o tsv)
             if [ -z "$MASTER_KEY" ]; then
               echo "Erro: não conseguiu obter master key da Function App."
               exit 1
