@@ -33,6 +33,11 @@ jobs:
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
       - name: Login no Azure via OIDC
         uses: azure/login@v2
         with:
@@ -208,6 +213,14 @@ jobs:
         run: |
           cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
           zip -r ../funcapp.zip .
+
+      - name: Validar requirements.txt localmente
+        run: |
+          cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+          if [ -f requirements.txt ]; then
+            pip install --upgrade pip
+            pip install -r requirements.txt
+          fi
 
       - name: Deploy Function App via Zip Deploy
         uses: azure/cli@v1
