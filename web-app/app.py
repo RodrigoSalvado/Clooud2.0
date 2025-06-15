@@ -141,8 +141,14 @@ def search():
         flash("Nenhum post válido retornado da ingestão.", "warning")
         return redirect(url_for("home"))
 
-    # 3) Salva na sessão
-    session["post_ids"] = post_ids
+    # 3) Salva na sessão, adicionando log dos IDs
+    # Exibe todos ou parte (se for muuuuito grande, você pode truncar)
+    max_show = 20
+    if len(post_ids) > max_show:
+        logger.info(f"[SEARCH] IDs a armazenar na sessão (mostrando apenas os {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
+    else:
+        logger.info(f"[SEARCH] IDs a armazenar na sessão: {post_ids}")
+    session["post_ids"] = post_ids  # ADICIONADO LOG antes desta linha
     session["search_params"] = {"subreddit": subreddit, "sort": sort, "limit": limit}
     logger.info(f"[SEARCH] session['post_ids'] salvo, total {len(post_ids)} IDs")
 
@@ -171,13 +177,25 @@ def detail_all():
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
-        logger.info(f"[DETAIL_ALL] Usando IDs vindos do form: {post_ids}")
+        # Log dos IDs vindos do form
+        max_show = 20
+        if len(post_ids) > max_show:
+            logger.info(f"[DETAIL_ALL] IDs vindos do form (mostrando apenas os {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
+        else:
+            logger.info(f"[DETAIL_ALL] IDs vindos do form: {post_ids}")
         # Atualiza a sessão também
         session["post_ids"] = post_ids
     else:
         # Fallback para sessão
         post_ids = session.get("post_ids", [])
-        logger.info(f"[DETAIL_ALL] Usando IDs vindos da sessão: {post_ids}")
+        if post_ids:
+            max_show = 20
+            if len(post_ids) > max_show:
+                logger.info(f"[DETAIL_ALL] IDs vindos da sessão (mostrando apenas os {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
+            else:
+                logger.info(f"[DETAIL_ALL] IDs vindos da sessão: {post_ids}")
+        else:
+            logger.info("[DETAIL_ALL] Nenhum post_ids encontrado na sessão.")
 
     if not post_ids:
         logger.warning("[DETAIL_ALL] Nenhum post disponível para análise (post_ids vazio).")
