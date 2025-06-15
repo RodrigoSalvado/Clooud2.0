@@ -318,7 +318,7 @@ jobs:
             SAS_FULL="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}"
             FUNCTION_URL_FULL="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}"
             GET_POSTS_FUNCTION_URL="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}"
-            REPORT_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/GenerateReport?code=${FUNCTION_KEY}"
+            REPORT_FUNCTION_URL="${{ steps.set_function_url.outputs.REPORT_FUNCTION_URL }}"
             echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
             echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
             echo "REPORT_FUNCTION_URL=$REPORT_FUNCTION_URL" >> $GITHUB_OUTPUT
