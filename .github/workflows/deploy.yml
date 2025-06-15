@@ -232,10 +232,7 @@ jobs:
         with:
           inlineScript: |
             sleep 15
-            MASTER_KEY=$(az functionapp keys list \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --query "masterKey" -o tsv)
+            MASTER_KEY=$(az functionapp keys list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --key-type hostKeys --query "masterKey" -o tsv)
             echo "FUNCTION_KEY=$MASTER_KEY" >> $GITHUB_OUTPUT
 
       - name: Construir FUNCTION URLs
