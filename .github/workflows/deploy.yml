@@ -1,4 +1,4 @@
-name: Deploy Bicep + Web App e Function App (hardcoded credentials)
+name: Deploy Bicep + Web App e Function App
 
 on:
   push:
@@ -76,17 +76,20 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            DEPLOY_NAME="deploy-storage-$(date +%s)"
-            az deployment group create \
-              --name "$DEPLOY_NAME" \
-              --resource-group "$RG" \
-              --template-file templates/storage-account.bicep \
-              --parameters \
-                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
-                containerName="${CONTAINER_NAME}" \
-                enableBlobVersioning=true \
-                blobSoftDeleteDays=7 \
-              --only-show-errors
+            ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
+            if ! az storage account show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
+              DEPLOY_NAME="deploy-storage-$(date +%s)"
+              az deployment group create \
+                --name "$DEPLOY_NAME" \
+                --resource-group "$RG" \
+                --template-file templates/storage-account.bicep \
+                --parameters \
+                  storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                  containerName="${CONTAINER_NAME}" \
+                  enableBlobVersioning=true \
+                  blobSoftDeleteDays=7 \
+                --only-show-errors
+            fi
 
       - name: Deploy CosmosDB via Bicep
         uses: azure/cli@v1
@@ -115,19 +118,22 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            DEPLOY_NAME="deploy-asp-web-$(date +%s)"
-            az deployment group create \
-              --name "$DEPLOY_NAME" \
-              --resource-group "$RG" \
-              --template-file templates/app-service-plan.bicep \
-              --parameters \
-                planName='ASP-MiniProjetoCloud2.0' \
-                skuTier='Basic' \
-                skuName='B2' \
-                capacity=1 \
-                isLinux=true \
-                location="$TARGET_LOCATION" \
-              --only-show-errors
+            PLAN_NAME='ASP-MiniProjetoCloud2.0'
+            if ! az appservice plan show --name "$PLAN_NAME" --resource-group "$RG" &>/dev/null; then
+              DEPLOY_NAME="deploy-asp-web-$(date +%s)"
+              az deployment group create \
+                --name "$DEPLOY_NAME" \
+                --resource-group "$RG" \
+                --template-file templates/app-service-plan.bicep \
+                --parameters \
+                  planName="$PLAN_NAME" \
+                  skuTier='Basic' \
+                  skuName='B2' \
+                  capacity=1 \
+                  isLinux=true \
+                  location="$TARGET_LOCATION" \
+                --only-show-errors
+            fi
 
       - name: Gerar SAS token e CONTAINER_ENDPOINT_SAS completo
         id: gen_sas
@@ -233,8 +239,8 @@ jobs:
                 FUNCTIONS_WORKER_RUNTIME=python \
                 FUNCTIONS_EXTENSION_VERSION="~4" \
                 AzureWebJobsStorage="${{ steps.get_storage_conn.outputs.STORAGE_CONNECTION_STRING }}" \
-                COSMOS_ENDPOINT="$COSMOS_ENDPOINT" \
-                COSMOS_KEY="$COSMOS_KEY" \
+                COSMOS_ENDPOINT="$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RG --query documentEndpoint -o tsv)" \
+                COSMOS_KEY="$(az cosmosdb keys list --name $COSMOS_ACCOUNT_NAME --resource-group $RG --query primaryMasterKey -o tsv)" \
                 COSMOS_DATABASE="RedditApp" \
                 COSMOS_CONTAINER="posts" \
                 REDDIT_USER="${REDDIT_USER}" \
@@ -256,7 +262,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "Aguardando Function App iniciar..."
             sleep 30
             MAX_RETRIES=5
             SLEEP_SECONDS=20
