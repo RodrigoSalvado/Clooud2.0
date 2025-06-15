@@ -213,7 +213,7 @@ jobs:
       - name: Debug - listar conteúdo redditIngestFunc antes do zip
         run: |
           echo "$(pwd)"
-          ls -R .
+          ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
 
       - name: Empacotar código da Function App para Zip Deploy
         run: |
@@ -248,8 +248,9 @@ jobs:
                 CLIENT_ID="${CLIENT_ID}" \
                 SECRET="${CLIENT_SECRET}" \
                 WEBSITE_RUN_FROM_PACKAGE=1 \
+                SCM_DO_BUILD_DURING_DEPLOYMENT=true \
                 CONTAINER_ENDPOINT_SAS="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
-                SCM_DO_BUILD_DURING_DEPLOYMENT=true
+                FUNCTIONS_WORKER_RUNTIME=python
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
