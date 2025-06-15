@@ -12,7 +12,7 @@
 
     <!-- Blocos de contagem de sentimentos -->
     <div class="row text-center mb-4">
-      <div class="col-md-4">
+      <div class="col-md-4 mb-2">
         <div class="card border-success">
           <div class="card-body">
             <h5 class="card-title text-success">Positivos</h5>
@@ -22,7 +22,7 @@
           </div>
         </div>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-4 mb-2">
         <div class="card border-warning">
           <div class="card-body">
             <h5 class="card-title text-warning">Neutros</h5>
@@ -32,7 +32,7 @@
           </div>
         </div>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-4 mb-2">
         <div class="card border-danger">
           <div class="card-body">
             <h5 class="card-title text-danger">Negativos</h5>
@@ -47,31 +47,37 @@
     <!-- Lista de posts -->
     <div class="mb-5">
       <h4>Lista de Posts Analisados</h4>
-      <ul class="list-group">
-        {% for post in posts %}
-          <li class="list-group-item">
-            <h6>{{ post.title }}</h6>
-            <p>
-              <strong>Sentimento:</strong> {{ post.sentimento }}
-              |
-              <strong>Confiança:</strong> {{ post.probabilidade }}%
-            </p>
-            {% if post.url %}
-              <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
+      {% if posts|length == 0 %}
+        <div class="alert alert-info">Nenhum post disponível para análise.</div>
+      {% else %}
+        <ul class="list-group">
+          {% for post in posts %}
+            <li class="list-group-item">
+              <h6>{{ post.title }}</h6>
+              <p class="mb-1">
+                <strong>Sentimento:</strong> {{ post.sentimento }}
+                |
+                <strong>Confiança:</strong> {{ post.probabilidade }}%
+              </p>
+              {% if post.url %}
+                <a href="{{ post.url }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
+              {% elif post.permalink %}
+                <a href="https://reddit.com{{ post.permalink }}" class="btn btn-sm btn-outline-primary" target="_blank">Ver no Reddit</a>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
     </div>
 
     <!-- Gráfico de densidade -->
     <div class="mb-5">
       <h4>Distribuição da Confiança por Sentimento</h4>
       {% if resumo_chart %}
-        {# resumo_chart deve ser algo como "static/distribuicao_confianca.png" #}
-        <img src="{{ url_for('static', filename=resumo_chart.split('static/')[-1]) }}"
+        {% set fname = resumo_chart.split('static/')[-1] %}
+        <img src="{{ url_for('static', filename=fname) }}"
              class="img-fluid"
-             alt="Densidade">
+             alt="Densidade de confiança">
       {% else %}
         <p class="text-muted">Dados insuficientes para exibir gráfico de densidade.</p>
       {% endif %}
@@ -81,7 +87,8 @@
     <div class="mb-5">
       <h4>Nuvem de Palavras</h4>
       {% if wc_chart %}
-        <img src="{{ url_for('static', filename=wc_chart.split('static/')[-1]) }}"
+        {% set fname_wc = wc_chart.split('static/')[-1] %}
+        <img src="{{ url_for('static', filename=fname_wc) }}"
              class="img-fluid"
              alt="Nuvem de Palavras">
       {% else %}
@@ -92,21 +99,23 @@
     <!-- Botão para gerar relatório -->
     <div class="mb-4 text-end">
       <form action="{{ url_for('gerar_relatorio') }}" method="post">
-        <button type="submit" class="btn btn-outline-dark mb-4">📄 Gerar Relatório CSV</button>
+        <button type="submit" class="btn btn-outline-dark">📄 Gerar Relatório CSV</button>
       </form>
     </div>
 
-    <!-- Link voltar à pesquisa, se existirem parâmetros -->
-    {% if session.search_params is defined and session.search_params.subreddit %}
+    <!-- Link voltar à pesquisa, se existirem parâmetros em session -->
+    {% set sp = session.get('search_params') %}
+    {% if sp and sp.subreddit %}
       <a href="{{ url_for('search',
-                          subreddit=session.search_params.subreddit,
-                          sort=session.search_params.sort,
-                          limit=session.search_params.limit) }}"
+                          subreddit=sp['subreddit'],
+                          sort=sp['sort'],
+                          limit=sp['limit']) }}"
          class="btn btn-secondary">← Voltar à Pesquisa</a>
     {% else %}
       <a href="{{ url_for('home') }}" class="btn btn-secondary">← Voltar</a>
     {% endif %}
 
   </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

@@ -64,16 +64,22 @@
           {% for post in posts %}
           <li class="list-group-item d-flex justify-content-between align-items-center">
             <div>
-              <!-- Ajuste conforme a estrutura de post: aqui considera post.url e post.title -->
-              <a href="{{ post.url }}" target="_blank">{{ post.title }}</a>
+              {# Ajuste conforme a estrutura de post: post.url e post.title ou permalink #}
+              {% if post.url %}
+                <a href="{{ post.url }}" target="_blank">{{ post.title }}</a>
+              {% elif post.permalink %}
+                <a href="https://reddit.com{{ post.permalink }}" target="_blank">{{ post.title }}</a>
+              {% else %}
+                {{ post.title }}
+              {% endif %}
             </div>
-            <!-- Se quiser botões individuais para cada post, pode habilitar: -->
-            <!--
+            {# Se quiser botões individuais para cada post, pode habilitar: #}
+            {# 
             <form method="post" action="{{ url_for('detail_all') }}" class="m-0">
               <input type="hidden" name="ids[]" value="{{ post.id }}">
               <button type="submit" class="btn btn-sm btn-secondary">Analisar este</button>
             </form>
-            -->
+            #}
           </li>
           {% endfor %}
         </ul>

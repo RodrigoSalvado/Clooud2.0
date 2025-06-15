@@ -57,9 +57,7 @@ def fetch_and_ingest_posts(subreddit: str, sort: str, limit: int):
     elif isinstance(data, list):
         posts = data
     else:
-        # Se for dict sem "posts" ou outro formato, logue e retorne lista vazia ou o dict dentro de lista
         logger.warning(f"[fetch_and_ingest_posts] JSON inesperado: {data!r}")
-        # tentar extrair por outra chave? aqui retornamos vazio para evitar crash
         posts = []
     logger.info(f"[fetch_and_ingest_posts] Recebeu {len(posts)} posts")
     return posts
@@ -119,12 +117,6 @@ def search():
     try:
         posts = fetch_and_ingest_posts(subreddit, sort, limit)
         logger.info(f"[SEARCH] fetch_and_ingest_posts retornou tipo {type(posts)}, len={len(posts)}")
-        if isinstance(posts, list) and posts:
-            logger.info(f"[SEARCH] Exemplos de posts: {posts[:3]!r}")
-        elif isinstance(posts, list) and not posts:
-            logger.warning("[SEARCH] fetch_and_ingest_posts retornou lista vazia")
-        else:
-            logger.warning(f"[SEARCH] fetch_and_ingest_posts retornou formato inesperado: {posts!r}")
     except Exception as e:
         logger.error(f"Erro ao obter/ingerir posts do Reddit: {e}", exc_info=True)
         flash(f"Erro ao obter posts do Reddit: {e}", "danger")
@@ -149,13 +141,9 @@ def search():
     try:
         cosmos_posts = get_posts_from_cosmos(post_ids)
         logger.info(f"[SEARCH] get_posts_from_cosmos retornou tipo {type(cosmos_posts)}, len={len(cosmos_posts)}")
-        if isinstance(cosmos_posts, list) and cosmos_posts:
-            logger.info(f"[SEARCH] Exemplos de cosmos_posts: {cosmos_posts[:3]!r}")
-        elif isinstance(cosmos_posts, list) and not cosmos_posts:
+        # Se veio lista vazia do Cosmos, podemos usar fallback para posts brutos (ou continuar com vazio, conforme sua lógica)
+        if isinstance(cosmos_posts, list) and not cosmos_posts:
             logger.warning("[SEARCH] get_posts_from_cosmos retornou lista vazia; usando posts brutos como fallback")
-            cosmos_posts = posts
-        else:
-            logger.warning(f"[SEARCH] get_posts_from_cosmos retornou formato inesperado: {cosmos_posts!r}; usando posts brutos como fallback")
             cosmos_posts = posts
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos: {e}", exc_info=True)
@@ -167,7 +155,22 @@ def search():
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
-    post_ids = session.get("post_ids")
+    # Tenta obter IDs do form primeiro (caso queira análise baseada em parâmetros do form)
+    # Os nomes hidden inputs em index.html devem ser name="ids[]" (ou "ids") conforme template.
+    ids_form = []
+    # Flask request.form.getlist deve usar a chave exatamente como nome no HTML:
+    # Se o input for <input name="ids[]" ...>, a chave será 'ids[]'
+    ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
+    if ids_form:
+        post_ids = ids_form
+        logger.info(f"[DETAIL_ALL] Usando IDs vindos do form: {post_ids}")
+        # opcionalmente, atualizar a sessão para uso futuro
+        session["post_ids"] = post_ids
+    else:
+        # fallback para session
+        post_ids = session.get("post_ids", [])
+        logger.info(f"[DETAIL_ALL] IDs vindos da sessão: {post_ids}")
+
     if not post_ids:
         flash("Nenhum post disponível para análise.", "warning")
         return redirect(url_for("home"))
@@ -376,7 +379,6 @@ def listar_ficheiros():
         logger.error("Erro ao listar ficheiros: %s", e, exc_info=True)
         flash(f"Erro ao listar ficheiros: {e}", "danger")
         return redirect(url_for("home"))
-
 
 if __name__ == "__main__":
     # Logs de variáveis de ambiente para debug inicial
