@@ -185,11 +185,10 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Function App via Bicep (template) com credenciais hardcoded
+      - name: Deploy Function App via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "Deploy Function App ($FUNCTIONAPP_NAME) via Bicep..."
             az deployment group create \
               --name "deploy-funcapp-$(date +%s)" \
               --resource-group "$RG" \
@@ -205,10 +204,11 @@ jobs:
                 redditPassword="${REDDIT_PASSWORD}" \
                 clientIdValue="${CLIENT_ID}" \
                 secretValue="${CLIENT_SECRET}" \
+                containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
                 translatorEndpoint="" \
                 translatorKey="" \
               --only-show-errors
-            echo "Function App deployment via Bicep concluído."
+
 
       - name: Debug - listar conteúdo redditIngestFunc antes do zip
         run: |
@@ -240,9 +240,9 @@ jobs:
               --settings \
                 FUNCTIONS_WORKER_RUNTIME=python \
                 FUNCTIONS_EXTENSION_VERSION="~4" \
-                # Se desejar, defina variáveis de ambiente específicas aqui:
-                COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
-                COSMOS_KEY="<sua-chave-cosmos>" \
+                AzureWebJobsStorage="$STORAGE_CONNECTION_STRING" \
+                COSMOS_ENDPOINT="$COSMOS_ENDPOINT" \
+                COSMOS_KEY="$COSMOS_KEY" \
                 COSMOS_DATABASE="RedditApp" \
                 COSMOS_CONTAINER="posts" \
                 REDDIT_USER="${REDDIT_USER}" \
@@ -250,7 +250,7 @@ jobs:
                 CLIENT_ID="${CLIENT_ID}" \
                 SECRET="${CLIENT_SECRET}" \
                 WEBSITE_RUN_FROM_PACKAGE=1 \
-                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
+                CONTAINER_ENDPOINT_SAS="$SAS_FULL" \
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
             az functionapp deployment source config-zip \
@@ -362,12 +362,6 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "=== App Settings do Web App após deploy ==="
             az webapp config appsettings list --resource-group "$RG" --name "$WEBAPP_NAME" -o table
-            echo "=== App Settings do Function App após deploy ==="
             az functionapp config appsettings list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" -o table
-            echo "=== Funções disponíveis na Function App ==="
-            az functionapp function list \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              -o table
+            az functionapp function list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" -o table

@@ -19,22 +19,26 @@ param cosmosContainerName string = 'posts'
 @description('Reddit user (hardcoded)')
 param redditUser string = 'Major-Noise-6411'
 
+@secure()
 @description('Reddit password (hardcoded)')
 param redditPassword string = 'miniprojetocloud'
 
+@secure()
 @description('Secret custom (hardcoded)')
 param secretValue string = 'DoywW0Lcc26rvDforDKkLOSQsUUwYA'
 
+@secure()
 @description('Client ID (hardcoded)')
 param clientIdValue string = 'bzG6zHjC23GSenSIXe0M-Q'
 
 @secure()
-@description('SAS token para o container (opcional). Se vazio, não será adicionado como APP SETTING.')
-param containerSasToken string = ''
+@description('SAS token ou URL do container com SAS (opcional). Se vazio, não será adicionado como APP SETTING.')
+param containerEndpointSas string = ''
 
-// Translator vazios por padrão. Se quiser pode sobrescrever.
 @description('Translator endpoint (deixe vazio se não for usar)')
 param translatorEndpoint string = ''
+
+@secure()
 @description('Translator key (deixe vazio se não for usar)')
 param translatorKey string = ''
 
@@ -72,7 +76,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'Python|3.11'
-      // Adicionar CORS para permitir chamadas de https://portal.azure.com
+      // Adicionar CORS para permitir chamadas de https://portal.azure.com, se necessário
       cors: {
         allowedOrigins: [
           'https://portal.azure.com'
@@ -126,7 +130,12 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           name: 'SECRET'
           value: secretValue
         }
-        // Translator (vazio por padrão)
+        // CLIENT_ID
+        {
+          name: 'CLIENT_ID'
+          value: clientIdValue
+        }
+        // Translator (pode ficar vazio)
         {
           name: 'TRANSLATOR_ENDPOINT'
           value: translatorEndpoint
@@ -135,11 +144,11 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           name: 'TRANSLATOR_KEY'
           value: translatorKey
         }
-        // CLIENT_ID
-        {
-          name: 'CLIENT_ID'
-          value: clientIdValue
-        }
+        // SAS do container (se fornecido)
+        // O nome do setting aqui deve bater com o que sua aplicação espera, por ex. CONTAINER_ENDPOINT_SAS
+        // e o valor é o parâmetro containerEndpointSas.
+        // Se containerEndpointSas for vazio, ainda assim será definido, mas você pode no código
+        // ignorar valor vazio se desejar.
         {
           name: 'CONTAINER_ENDPOINT_SAS'
           value: containerEndpointSas
@@ -153,5 +162,5 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   }
 }
 
-// Saída do hostname
+// Saída do hostname da Function App
 output functionAppDefaultHostName string = functionApp.properties.defaultHostName
