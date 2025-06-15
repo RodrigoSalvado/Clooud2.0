@@ -28,6 +28,10 @@ param secretValue string = 'DoywW0Lcc26rvDforDKkLOSQsUUwYA'
 @description('Client ID (hardcoded)')
 param clientIdValue string = 'bzG6zHjC23GSenSIXe0M-Q'
 
+@secure()
+@description('SAS token para o container (opcional). Se vazio, não será adicionado como APP SETTING.')
+param containerSasToken string = ''
+
 // Translator vazios por padrão. Se quiser pode sobrescrever.
 @description('Translator endpoint (deixe vazio se não for usar)')
 param translatorEndpoint string = ''
@@ -135,6 +139,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'CLIENT_ID'
           value: clientIdValue
+        }
+        {
+          name: 'CONTAINER_ENDPOINT_SAS'
+          value: containerEndpointSas
         }
       ]
     }

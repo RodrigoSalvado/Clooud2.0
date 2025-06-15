@@ -34,6 +34,9 @@ param functionUrl string = ''
 @description('URL completa da Function (com chave) para app setting GET_POSTS_FUNCTION_URL. Se vazio, não adiciona.')
 param functionGetPostsUrl string = ''
 
+@description('URL completa da Function (com chave) para app setting REPORT_FUNCTION_URL. Se vazio, não adiciona.')
+param functionGenerateReport string = ''
+
 
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
@@ -101,6 +104,10 @@ var functionUrlSettings array = addFunctionUrl ? [
   {
     name: 'GET_POSTS_FUNCTION_URL'
     value: functionGetPostsUrl
+  }
+  {
+    name: 'REPORT_FUNCTION_URL'
+    value: functionGenerateReport
   }
 ] : []
 

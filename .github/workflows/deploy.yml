@@ -241,15 +241,16 @@ jobs:
                 FUNCTIONS_WORKER_RUNTIME=python \
                 FUNCTIONS_EXTENSION_VERSION="~4" \
                 # Se desejar, defina variáveis de ambiente específicas aqui:
-                # COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
-                # COSMOS_KEY="<sua-chave-cosmos>" \
-                # COSMOS_DATABASE="RedditApp" \
-                # COSMOS_CONTAINER="posts" \
-                # REDDIT_USER="${REDDIT_USER}" \
-                # REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
-                # CLIENT_ID="${CLIENT_ID}" \
-                # SECRET="${CLIENT_SECRET}" \
+                COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
+                COSMOS_KEY="<sua-chave-cosmos>" \
+                COSMOS_DATABASE="RedditApp" \
+                COSMOS_CONTAINER="posts" \
+                REDDIT_USER="${REDDIT_USER}" \
+                REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
+                CLIENT_ID="${CLIENT_ID}" \
+                SECRET="${CLIENT_SECRET}" \
                 WEBSITE_RUN_FROM_PACKAGE=1 \
+                containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
             az functionapp deployment source config-zip \
@@ -294,10 +295,14 @@ jobs:
           fi
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${FUNCTION_KEY}"
           GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${FUNCTION_KEY}"
+          REPORT_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/GenerateReport?code=${FUNCTION_KEY}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
           echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
           echo "DEBUG: FUNCTION_URL_FULL = $FUNCTION_URL_FULL"
           echo "DEBUG: GET_POSTS_FUNCTION_URL = $GET_POSTS_FUNCTION_URL"
+          echo "DEBUG: REPORT_FUNCTION_URL = $REPORT_FUNCTION_URL"
+
+          
 
       - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS via CLI + Bicep
         uses: azure/cli@v1
@@ -306,6 +311,7 @@ jobs:
             SAS_FULL="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}"
             FUNCTION_URL_FULL="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}"
             GET_POSTS_FUNCTION_URL="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}"
+            REPORT_FUNCTION_URL="${{ steps.set_function_url.outputs.REPORT_FUNCTION_URL }}"
             echo "DEBUG: SAS_FULL para deploy do Web App: $SAS_FULL"
             echo "DEBUG: FUNCTION_URL_FULL: $FUNCTION_URL_FULL"
             echo "DEBUG: GET_POSTS_FUNCTION_URL: $GET_POSTS_FUNCTION_URL"
@@ -339,6 +345,7 @@ jobs:
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="$FUNCTION_URL_FULL" \
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
+                functionGenerateReport="$REPORT_FUNCTION_URL"
                 containerEndpointSas="$SAS_FULL" \
               --only-show-errors
             echo "Web App deployment concluído."
