@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
+# Usaremos pipeline de sentiment-analysis para melhorar performance
 from transformers import pipeline
 from wordcloud import WordCloud, STOPWORDS
 from flask import Flask, render_template, request, flash, redirect, url_for, session
@@ -32,15 +33,13 @@ FUNCTION_URL = os.getenv("FUNCTION_URL")        # e.g. https://<sua-func>.azurew
 GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")  # e.g. https://<sua-func>.azurewebsites.net/api/getposts?code=...
 CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")  # e.g. https://<storage>.blob.core.windows.net/<container>?<sas>
 
-# Inicializar pipeline de análise de sentimento (zero-shot)
+# Inicializar pipeline de análise de sentimento (sentiment-analysis padrão, leve)
 try:
-    classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-    candidate_labels = ["negative", "neutral", "positive"]
-    logger.info("Pipeline de sentiment carregado com sucesso.")
+    classifier = pipeline("sentiment-analysis")
+    logger.info("Pipeline de sentiment-analysis carregado com sucesso.")
 except Exception as e:
-    logger.error("Falha ao inicializar pipeline de sentimento: %s", e, exc_info=True)
+    logger.error("Falha ao inicializar pipeline de sentiment-analysis: %s", e, exc_info=True)
     classifier = None
-    candidate_labels = []
 
 def fetch_and_ingest_posts(subreddit: str, sort: str, limit: int):
     """
@@ -72,7 +71,7 @@ def fetch_and_ingest_posts(subreddit: str, sort: str, limit: int):
 def get_posts_from_cosmos(ids: list[str]):
     """
     Chama a Azure Function GET_POSTS com query param "ids=id1,id2,...", retorna lista de posts do Cosmos.
-    Espera que a resposta JSON seja {"posts": [...]}.
+    Espera que a resposta JSON seja {"posts": [...]} ou lista diretamente.
     """
     if not GET_POSTS_FUNCTION_URL:
         raise RuntimeError("GET_POSTS_FUNCTION_URL não está configurado")
@@ -102,6 +101,7 @@ def home():
     # Limpa sessão de pesquisas anteriores
     session.pop("post_ids", None)
     session.pop("search_params", None)
+    session.pop("posts_raw", None)
     # Passa valores padrão para campos do formulário
     return render_template("index.html", posts=None, subreddit="", sort="hot", limit=10)
 
@@ -131,15 +131,18 @@ def search():
 
     # 2) Extrai IDs válidos, montando <subreddit>_<raw_id>
     post_ids = []
-    # Também queremos armazenar, em cada post bruto, uma chave 'full_id' para usar no template
     posts_with_full = []
     if isinstance(posts, list):
         for p in posts:
             raw_id = p.get("id")
-            if isinstance(p, dict) and raw_id:
-                full_id = f"{subreddit}_{raw_id}"
+            if raw_id:
+                # Evita duplicar prefixo se API já retornou algo como "<subreddit>_<id>"
+                if "_" in raw_id:
+                    full_id = raw_id
+                else:
+                    full_id = f"{subreddit}_{raw_id}"
                 post_ids.append(full_id)
-                # adicionar campo full_id ao post para possível uso no template:
+                # adiciona campo full_id ao post para uso posterior
                 p_copy = p.copy()
                 p_copy['full_id'] = full_id
                 posts_with_full.append(p_copy)
@@ -156,7 +159,10 @@ def search():
         logger.info(f"[SEARCH] IDs a armazenar na sessão: {post_ids}")
     session["post_ids"] = post_ids
     session["search_params"] = {"subreddit": subreddit, "sort": sort, "limit": limit}
-    logger.info(f"[SEARCH] session['post_ids'] salvo, total {len(post_ids)} IDs")
+    # Armazena posts brutos para uso no detail_all sem nova chamada externa
+    # Atenção: deve ser serializável (dicts, listas, strings, ints)
+    session["posts_raw"] = posts_with_full
+    logger.info(f"[SEARCH] session['post_ids'] salvo (total {len(post_ids)} IDs) e session['posts_raw'].")
 
     # 4) Buscar dados completos via Cosmos usando os IDs completos
     try:
@@ -164,17 +170,12 @@ def search():
         logger.info(f"[SEARCH] get_posts_from_cosmos retornou len={len(cosmos_posts)}")
         if isinstance(cosmos_posts, list) and not cosmos_posts:
             logger.warning("[SEARCH] get_posts_from_cosmos retornou lista vazia; usando posts brutos como fallback")
-            # Aqui, posts brutos têm apenas 'id'; já temos posts_with_full com 'full_id'
-            # Mas note: se o template precisar do full_id, use posts_with_full
             cosmos_posts = posts_with_full
         else:
-            # Se vier do Cosmos, certifique-se de que cada item retornado também contenha 'full_id' ou 'id' no formato esperado.
-            # Supondo que no Cosmos o documento já foi salvo com id = full_id, e retorna campo 'id' igual a esse full_id:
-            # podemos mapear para 'full_id' também:
+            # Se vier do Cosmos, mapeia campo 'id' para 'full_id'
             new_list = []
             for doc in cosmos_posts:
                 d = doc.copy()
-                # se o campo 'id' já é "<subreddit>_<raw_id>", registramos:
                 if 'id' in d:
                     d['full_id'] = d['id']
                 new_list.append(d)
@@ -194,17 +195,16 @@ def search():
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
-    # Tentar ler IDs vindos do form: espera que o template tenha usado post.full_id como value
+    # Tentar ler IDs vindos do form: espera que o template use post.full_id como value
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
         # Log dos IDs vindos do form
         max_show = 20
         if len(post_ids) > max_show:
-            logger.info(f"[DETAIL_ALL] IDs vindos do form (mostrando apenas os {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
+            logger.info(f"[DETAIL_ALL] IDs vindos do form (mostrando apenas {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
         else:
             logger.info(f"[DETAIL_ALL] IDs vindos do form: {post_ids}")
-        # Atualiza a sessão também
         session["post_ids"] = post_ids
     else:
         # Fallback para sessão
@@ -212,7 +212,7 @@ def detail_all():
         if post_ids:
             max_show = 20
             if len(post_ids) > max_show:
-                logger.info(f"[DETAIL_ALL] IDs vindos da sessão (mostrando apenas os {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
+                logger.info(f"[DETAIL_ALL] IDs vindos da sessão (mostrando apenas {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
             else:
                 logger.info(f"[DETAIL_ALL] IDs vindos da sessão: {post_ids}")
         else:
@@ -234,34 +234,19 @@ def detail_all():
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos em detail_all: {e}", exc_info=True)
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
-        return redirect(url_for("home"))
+        posts = []
 
-    # 2) Se não encontrou nada no Cosmos, faz fallback usando posts brutos:
+    # 2) Se não encontrou nada no Cosmos, faz fallback usando posts brutos em sessão
     if not posts:
-        logger.warning("[DETAIL_ALL] get_posts_from_cosmos retornou vazio; tentando usar posts brutos para análise.")
-        params = session.get("search_params", {})
-        subreddit = params.get("subreddit")
-        sort = params.get("sort")
-        limit = params.get("limit")
-        raw_posts = []
-        if subreddit and limit:
-            try:
-                raw = fetch_and_ingest_posts(subreddit, sort, limit)
-                # Montar lista filtrada: comparar full_id esperado
-                filtered = []
-                for p in raw:
-                    raw_id = p.get("id")
-                    if raw_id:
-                        full_id = f"{subreddit}_{raw_id}"
-                        if full_id in post_ids:
-                            p_copy = p.copy()
-                            p_copy['full_id'] = full_id
-                            filtered.append(p_copy)
-                raw_posts = filtered
-                logger.info(f"[DETAIL_ALL] posts brutos filtrados para análise: {len(raw_posts)}")
-            except Exception as e:
-                logger.error(f"[DETAIL_ALL] falha ao re-buscar posts brutos: {e}", exc_info=True)
-        posts = raw_posts
+        logger.warning("[DETAIL_ALL] get_posts_from_cosmos retornou vazio; usando posts brutos da sessão para análise.")
+        raw_posts = session.get("posts_raw", [])
+        filtered = []
+        for p in raw_posts:
+            full = p.get("full_id")
+            if full and full in post_ids:
+                filtered.append(p.copy())
+        posts = filtered
+        logger.info(f"[DETAIL_ALL] posts brutos filtrados para análise: {len(posts)}")
 
     if not posts:
         logger.warning("[DETAIL_ALL] Ainda não há posts para analisar (nem no Cosmos nem no fallback).")
@@ -282,16 +267,33 @@ def detail_all():
             post['scores_raw'] = {}
         else:
             try:
-                sentiment = classifier(input_text, candidate_labels)
-                scores = dict(zip(sentiment['labels'], sentiment['scores']))
-                top_label = sentiment['labels'][0].capitalize()
-                post['sentimento'] = top_label
-                post['probabilidade'] = int(sentiment['scores'][0] * 100)
-                post['scores_raw'] = scores
-                neg_probs.append(scores.get("negative", 0) * 100)
-                neu_probs.append(scores.get("neutral", 0) * 100)
-                pos_probs.append(scores.get("positive", 0) * 100)
-                text_accum.append(input_text)
+                # Usando sentiment-analysis padrão, que retorna algo como [{'label':'NEGATIVE','score':0.99}]
+                # Trunca input_text se muito longo (os modelos têm limite de tokens)
+                snippet = input_text
+                # Opcional: truncar para, ex., primeiros 512 caracteres
+                if len(snippet) > 512:
+                    snippet = snippet[:512]
+                result = classifier(snippet)
+                if isinstance(result, list) and result:
+                    label = result[0].get('label', '').capitalize()
+                    score = result[0].get('score', 0.0)
+                    post['sentimento'] = label
+                    post['probabilidade'] = int(score * 100)
+                    # Como não temos scores para neutral separado, deixamos scores_raw simples
+                    post['scores_raw'] = {label.lower(): score}
+                    # Distribuição aproximada: se quiser, podemos colocar 100-score como outro, mas deixamos simples
+                    if label.lower() == 'negative':
+                        neg_probs.append(score * 100)
+                    elif label.lower() == 'positive':
+                        pos_probs.append(score * 100)
+                    else:
+                        # Alguns pipelines retornam 'NEUTRAL'; então:
+                        neu_probs.append(score * 100)
+                    text_accum.append(input_text)
+                else:
+                    post['sentimento'] = 'Unknown'
+                    post['probabilidade'] = 0
+                    post['scores_raw'] = {}
             except Exception as e:
                 logger.error(f"Erro ao analisar sentimento do post '{post.get('title')[:30]}...': {e}", exc_info=True)
                 post['sentimento'] = 'Error'
