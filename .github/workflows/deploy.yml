@@ -1,4 +1,4 @@
-name: Deploy Bicep + Web App e Function App
+name: Deploy Bicep + Web App e Function App (hardcoded credentials)
 
 on:
   push:
@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Ajuste estes valores conforme teu ambiente
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
@@ -24,6 +25,7 @@ jobs:
       AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
       STORAGE_ACCOUNT_NAME: 'miniprojetostorage20'
       CONTAINER_NAME: 'reddit-posts'
+      # Credenciais hardcoded (não seguro em repositório público!)
       REDDIT_USER: 'Major-Noise-6411'
       REDDIT_PASSWORD: 'miniprojetocloud'
       CLIENT_ID: 'bzG6zHjC23GSenSIXe0M-Q'
@@ -33,11 +35,6 @@ jobs:
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Login no Azure via OIDC
         uses: azure/login@v2
         with:
@@ -45,95 +42,102 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Instalar jq
+      - name: Instalar jq (no runner) para JSON parsing
         run: |
           if ! command -v jq &>/dev/null; then
             sudo apt-get update
             sudo apt-get install -y jq
           fi
 
-      - name: Install Azure Functions Core Tools
-        run: npm install -g azure-functions-core-tools@4 --unsafe-perm true
-
       - name: (Re)Criar Resource Group se não existir
         run: |
+          echo "Verificando existência do Resource Group $RG..."
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
           if [ -z "$EXISTE_RG_JSON" ]; then
+            echo "Criando Resource Group '$RG' em $TARGET_LOCATION..."
             az group create --name "$RG" --location "$TARGET_LOCATION"
+          else
+            echo "Resource Group '$RG' já existe em $TARGET_LOCATION. Continuando."
           fi
 
       - name: Validar templates Bicep localmente
         run: |
           az bicep install || true
+          echo "Validando e compilando templates Bicep..."
           az bicep build --file templates/resource-group.bicep
           az bicep build --file templates/storage-account.bicep
           az bicep build --file templates/cosmosdb.bicep
           az bicep build --file templates/app-service-plan.bicep
           az bicep build --file templates/function-app.bicep
           az bicep build --file templates/web-app.bicep
+          echo "Templates Bicep compilados com sucesso."
 
       - name: Deploy Storage Account + Container via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
-            ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
-            if ! az storage account show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
-              DEPLOY_NAME="deploy-storage-$(date +%s)"
-              az deployment group create \
-                --name "$DEPLOY_NAME" \
-                --resource-group "$RG" \
-                --template-file templates/storage-account.bicep \
-                --parameters \
-                  storageAccountName="${STORAGE_ACCOUNT_NAME}" \
-                  containerName="${CONTAINER_NAME}" \
-                  enableBlobVersioning=true \
-                  blobSoftDeleteDays=7 \
-                --only-show-errors
-            fi
+            DEPLOY_NAME="deploy-storage-$(date +%s)"
+            echo "Deploy Storage Account via Bicep: $DEPLOY_NAME"
+            az deployment group create \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
+              --template-file templates/storage-account.bicep \
+              --parameters \
+                storageAccountName="${STORAGE_ACCOUNT_NAME}" \
+                containerName="${CONTAINER_NAME}" \
+                enableBlobVersioning=true \
+                blobSoftDeleteDays=7 \
+              --only-show-errors
+            echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
-      - name: Deploy CosmosDB via Bicep
+      - name: Deploy CosmosDB (se não existir) via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
             ACCOUNT_NAME="${COSMOS_ACCOUNT_NAME}"
-            if [ -n "$ACCOUNT_NAME" ]; then
-              if ! az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
-                DEPLOY_NAME="deploy-cosmos-$(date +%s)"
-                az deployment group create \
-                  --name "$DEPLOY_NAME" \
-                  --resource-group "$RG" \
-                  --template-file templates/cosmosdb.bicep \
-                  --parameters \
-                    cosmosAccountName="$ACCOUNT_NAME" \
-                    cosmosLocation="$TARGET_LOCATION" \
-                    cosmosDatabaseName='RedditApp' \
-                    cosmosContainerName='posts' \
-                    cosmosPartitionKeyPath='/subreddit' \
-                    cosmosThroughput=${COSMOS_THROUGHPUT} \
-                  --only-show-errors
-              fi
+            if [ -z "$ACCOUNT_NAME" ]; then
+              echo "Variável COSMOS_ACCOUNT_NAME vazia: pulando Cosmos DB."
+              exit 0
+            fi
+            if az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
+              echo "Conta Cosmos DB '$ACCOUNT_NAME' já existe em RG '$RG'. Pulando deploy."
+            else
+              echo "Conta Cosmos DB '$ACCOUNT_NAME' NÃO existe. Realizando deploy em $TARGET_LOCATION..."
+              DEPLOY_NAME="deploy-cosmos-$(date +%s)"
+              az deployment group create \
+                --name "$DEPLOY_NAME" \
+                --resource-group "$RG" \
+                --template-file templates/cosmosdb.bicep \
+                --parameters \
+                  cosmosAccountName="$ACCOUNT_NAME" \
+                  cosmosLocation="$TARGET_LOCATION" \
+                  cosmosDatabaseName='RedditApp' \
+                  cosmosContainerName='posts' \
+                  cosmosPartitionKeyPath='/subreddit' \
+                  cosmosThroughput=${COSMOS_THROUGHPUT} \
+                --only-show-errors
+              echo "Deploy Cosmos concluído: $DEPLOY_NAME"
             fi
 
       - name: Deploy App Service Plan para Web App via Bicep
         uses: azure/cli@v1
         with:
           inlineScript: |
-            PLAN_NAME='ASP-MiniProjetoCloud2.0'
-            if ! az appservice plan show --name "$PLAN_NAME" --resource-group "$RG" &>/dev/null; then
-              DEPLOY_NAME="deploy-asp-web-$(date +%s)"
-              az deployment group create \
-                --name "$DEPLOY_NAME" \
-                --resource-group "$RG" \
-                --template-file templates/app-service-plan.bicep \
-                --parameters \
-                  planName="$PLAN_NAME" \
-                  skuTier='Basic' \
-                  skuName='B2' \
-                  capacity=1 \
-                  isLinux=true \
-                  location="$TARGET_LOCATION" \
-                --only-show-errors
-            fi
+            DEPLOY_NAME="deploy-asp-web-$(date +%s)"
+            echo "Deploy App Service Plan via Bicep: $DEPLOY_NAME"
+            az deployment group create \
+              --name "$DEPLOY_NAME" \
+              --resource-group "$RG" \
+              --template-file templates/app-service-plan.bicep \
+              --parameters \
+                planName='ASP-MiniProjetoCloud2.0' \
+                skuTier='Basic' \
+                skuName='B2' \
+                capacity=1 \
+                isLinux=true \
+                location="$TARGET_LOCATION" \
+              --only-show-errors
+            echo "App Service Plan deploy concluído: $DEPLOY_NAME"
 
       - name: Gerar SAS token e CONTAINER_ENDPOINT_SAS completo
         id: gen_sas
@@ -142,6 +146,7 @@ jobs:
           inlineScript: |
             ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME}"
             CONTAINER_NAME="${CONTAINER_NAME}"
+            echo "Gerando SAS token para o container ${CONTAINER_NAME} na Storage Account ${ACCOUNT_NAME}..."
             EXPIRY=$(date -u -d "30 days" '+%Y-%m-%dT%H:%MZ')
             ACCOUNT_KEY=$(az storage account keys list \
               --account-name "$ACCOUNT_NAME" \
@@ -162,15 +167,7 @@ jobs:
             fullSasUrl="${blobEndpoint}/${CONTAINER_NAME}?${sasToken}"
             echo "SAS_TOKEN=$sasToken" >> $GITHUB_OUTPUT
             echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
-
-      - name: Obter connection string da Storage Account
-        id: get_storage_conn
-        run: |
-          CONN=$(az storage account show-connection-string \
-            --name "$STORAGE_ACCOUNT_NAME" \
-            --resource-group "$RG" \
-            --query connectionString -o tsv)
-          echo "STORAGE_CONNECTION_STRING=$CONN" >> $GITHUB_OUTPUT
+            echo "DEBUG: fullSasUrl = $fullSasUrl"
 
       - name: Login Docker Hub
         uses: docker/login-action@v2
@@ -180,16 +177,19 @@ jobs:
 
       - name: Build da imagem Docker da Web App
         run: |
+          echo "A construir a imagem Docker: rodrig0salv/minha-app:latest"
           docker build -t rodrig0salv/minha-app:latest ./web-app
 
       - name: Push da imagem Docker para Docker Hub
         run: |
+          echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Function App via Bicep
+      - name: Deploy Function App via Bicep (template) com credenciais hardcoded
         uses: azure/cli@v1
         with:
           inlineScript: |
+            echo "Deploy Function App ($FUNCTIONAPP_NAME) via Bicep..."
             az deployment group create \
               --name "deploy-funcapp-$(date +%s)" \
               --resource-group "$RG" \
@@ -205,81 +205,81 @@ jobs:
                 redditPassword="${REDDIT_PASSWORD}" \
                 clientIdValue="${CLIENT_ID}" \
                 secretValue="${CLIENT_SECRET}" \
-                containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
                 translatorEndpoint="" \
                 translatorKey="" \
               --only-show-errors
+            echo "Function App deployment via Bicep concluído."
 
       - name: Debug - listar conteúdo redditIngestFunc antes do zip
         run: |
-          echo "$(pwd)"
+          echo "PWD: $(pwd)"
+          echo "Conteúdo raiz do repositório:"
+          ls -R .
+          echo "Conteúdo de ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
           ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
 
       - name: Empacotar código da Function App para Zip Deploy
         run: |
+          echo "Empacotando código das Azure Functions em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}..."
           cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+          echo "Listando antes do zip:"
+          ls -R .
+          echo "Zipando..."
           zip -r ../funcapp.zip .
-
-      - name: Validar requirements.txt localmente
-        run: |
-          cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-          if [ -f requirements.txt ]; then
-            pip install --upgrade pip
-            pip install -r requirements.txt
-          fi
+          echo "Listando conteúdo do zip:"
+          unzip -l ../funcapp.zip
 
       - name: Deploy Function App via Zip Deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
+            echo "Configurando runtime e deploy das Functions..."
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               --settings \
                 FUNCTIONS_WORKER_RUNTIME=python \
                 FUNCTIONS_EXTENSION_VERSION="~4" \
-                AzureWebJobsStorage="${{ steps.get_storage_conn.outputs.STORAGE_CONNECTION_STRING }}" \
-                COSMOS_ENDPOINT="$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RG --query documentEndpoint -o tsv)" \
-                COSMOS_KEY="$(az cosmosdb keys list --name $COSMOS_ACCOUNT_NAME --resource-group $RG --query primaryMasterKey -o tsv)" \
-                COSMOS_DATABASE="RedditApp" \
-                COSMOS_CONTAINER="posts" \
-                REDDIT_USER="${REDDIT_USER}" \
-                REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
-                CLIENT_ID="${CLIENT_ID}" \
-                SECRET="${CLIENT_SECRET}" \
+                # Se desejar, defina variáveis de ambiente específicas aqui:
+                # COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
+                # COSMOS_KEY="<sua-chave-cosmos>" \
+                # COSMOS_DATABASE="RedditApp" \
+                # COSMOS_CONTAINER="posts" \
+                # REDDIT_USER="${REDDIT_USER}" \
+                # REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
+                # CLIENT_ID="${CLIENT_ID}" \
+                # SECRET="${CLIENT_SECRET}" \
                 WEBSITE_RUN_FROM_PACKAGE=1 \
-                SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-                CONTAINER_ENDPOINT_SAS="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
-                FUNCTIONS_WORKER_RUNTIME=python
+                SCM_DO_BUILD_DURING_DEPLOYMENT=true
+
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
               --src "$GITHUB_WORKSPACE/funcapp.zip" \
               --only-show-errors
-            az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --only-show-errors
+
+            echo "Aguardando indexação das funções..."
+            sleep 20
+            echo "Funções publicadas na Function App (via Azure CLI):"
+            az functionapp function list \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              -o table
 
       - name: Aguardar indexação e obter master key da Function App
         id: get_function_key
         uses: azure/cli@v1
         with:
           inlineScript: |
-            sleep 30
-            MAX_RETRIES=5
-            SLEEP_SECONDS=20
-            attempt=1
-            MASTER_KEY=""
-            while [ $attempt -le $MAX_RETRIES ]; do
-              state=$(az functionapp show --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "state" -o tsv 2>/dev/null)
-              if [ "$state" = "Running" ]; then
-                MASTER_KEY=$(az functionapp keys list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --query "masterKey" -o tsv 2>/dev/null || echo "")
-                if [ -n "$MASTER_KEY" ]; then
-                  break
-                fi
-              fi
-              attempt=$((attempt+1))
-              sleep $SLEEP_SECONDS
-            done
+            echo "Aguardando indexação final das funções..."
+            sleep 15
+            echo "Obtendo master key da Function App '$FUNCTIONAPP_NAME'..."
+            MASTER_KEY=$(az functionapp keys list \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --query "masterKey" -o tsv)
             if [ -z "$MASTER_KEY" ]; then
+              echo "Erro: não conseguiu obter master key da Function App."
               exit 1
             fi
             echo "FUNCTION_KEY=$MASTER_KEY" >> $GITHUB_OUTPUT
@@ -287,13 +287,17 @@ jobs:
       - name: Construir FUNCTION URLs
         id: set_function_url
         run: |
+          echo "Montando URLs das funções..."
           FUNCTION_KEY="${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
+          if [ -z "$FUNCTION_KEY" ]; then
+            echo "WARNING: FUNCTION_KEY está vazio!"
+          fi
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${FUNCTION_KEY}"
           GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${FUNCTION_KEY}"
-          REPORT_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/GenerateReport?code=${FUNCTION_KEY}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
           echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
-          echo "REPORT_FUNCTION_URL=$REPORT_FUNCTION_URL" >> $GITHUB_OUTPUT
+          echo "DEBUG: FUNCTION_URL_FULL = $FUNCTION_URL_FULL"
+          echo "DEBUG: GET_POSTS_FUNCTION_URL = $GET_POSTS_FUNCTION_URL"
 
       - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS via CLI + Bicep
         uses: azure/cli@v1
@@ -302,15 +306,23 @@ jobs:
             SAS_FULL="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}"
             FUNCTION_URL_FULL="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}"
             GET_POSTS_FUNCTION_URL="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}"
-            REPORT_FUNCTION_URL="${{ steps.set_function_url.outputs.REPORT_FUNCTION_URL }}"
+            echo "DEBUG: SAS_FULL para deploy do Web App: $SAS_FULL"
+            echo "DEBUG: FUNCTION_URL_FULL: $FUNCTION_URL_FULL"
+            echo "DEBUG: GET_POSTS_FUNCTION_URL: $GET_POSTS_FUNCTION_URL"
+            if [ -z "$FUNCTION_URL_FULL" ] || [ -z "$GET_POSTS_FUNCTION_URL" ]; then
+              echo "ERRO: As URLs das functions estão vazias. Verifique a etapa anterior."
+              exit 1
+            fi
+            # Define App Settings no Web App:
             az webapp config appsettings set \
               --resource-group "$RG" \
               --name "$WEBAPP_NAME" \
               --settings \
                 CONTAINER_ENDPOINT_SAS="$SAS_FULL" \
                 FUNCTION_URL="$FUNCTION_URL_FULL" \
-                GET_POSTS_FUNCTION_URL="$GET_POSTS_FUNCTION_URL" \
-                functionGenerateReport="$REPORT_FUNCTION_URL"
+                GET_POSTS_FUNCTION_URL="$GET_POSTS_FUNCTION_URL"
+
+            echo "Iniciando deploy Web App ($WEBAPP_NAME) via Bicep..."
             az deployment group create \
               --name "deploy-webapp-$(date +%s)" \
               --resource-group "$RG" \
@@ -327,14 +339,15 @@ jobs:
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="$FUNCTION_URL_FULL" \
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
-                functionGenerateReport="$REPORT_FUNCTION_URL" \
                 containerEndpointSas="$SAS_FULL" \
               --only-show-errors
+            echo "Web App deployment concluído."
 
       - name: Reiniciar Web App e Function App após deploy
         uses: azure/cli@v1
         with:
           inlineScript: |
+            echo "Reiniciando Web App e Function App..."
             az webapp restart --resource-group "$RG" --name "$WEBAPP_NAME" --only-show-errors
             az functionapp restart --resource-group "$RG" --name "$FUNCTIONAPP_NAME" --only-show-errors
 
@@ -342,6 +355,12 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
+            echo "=== App Settings do Web App após deploy ==="
             az webapp config appsettings list --resource-group "$RG" --name "$WEBAPP_NAME" -o table
+            echo "=== App Settings do Function App após deploy ==="
             az functionapp config appsettings list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" -o table
-            az functionapp function list --resource-group "$RG" --name "$FUNCTIONAPP_NAME" -o table
+            echo "=== Funções disponíveis na Function App ==="
+            az functionapp function list \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              -o table
