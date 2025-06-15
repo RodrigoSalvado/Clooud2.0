@@ -17,17 +17,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+# Use uma variável de ambiente para a chave secreta; em dev, cai no padrão “dev_secret_key”
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_secret_key")
 
 # Variáveis de ambiente esperadas
-# FUNCTION_URL: URL da Azure Function que ingere do Reddit e insere/atualiza no Cosmos, retorna lista de posts
-FUNCTION_URL = os.getenv("FUNCTION_URL")
-# GET_POSTS_FUNCTION_URL: URL da Azure Function que, dado ?ids=id1,id2,..., faz read do Cosmos e retorna {"posts": [...]}
-GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")
-# SAS do container para relatórios/gráficos
-CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")
+FUNCTION_URL = os.getenv("FUNCTION_URL")  # ex: https://<sua-func>.azurewebsites.net/api/search?code=...
+GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")  # ex: https://<sua-func>.azurewebsites.net/api/getposts?code=...
+CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")  # ex: https://<storage>.blob.core.windows.net/<container>?<sas>
 
-# Inicializar pipeline de análise de sentimento
+# Inicializar pipeline de análise de sentimento (zero-shot)
 try:
     classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
     candidate_labels = ["negative", "neutral", "positive"]
@@ -37,44 +35,70 @@ except Exception as e:
     classifier = None
     candidate_labels = []
 
-def fetch_and_ingest_posts(subreddit, sort, limit):
+def fetch_and_ingest_posts(subreddit: str, sort: str, limit: int):
     """
-    Chama a função de ingestão do Reddit (FUNCTION_URL), retorna lista de posts (cada post dict com 'id', 'subreddit', 'title', etc).
-    Essa função faz o upsert no Cosmos e devolve os dados recém-ingestados do Reddit.
+    Chama a Azure Function que ingere do Reddit e retorna lista de posts.
+    Espera que a Azure Function retorne JSON com chave "posts": [...], ou liste diretamente.
     """
     if not FUNCTION_URL:
         raise RuntimeError("FUNCTION_URL não está configurado")
-    resp = requests.get(
-        FUNCTION_URL,
-        params={"subreddit": subreddit, "sort": sort, "limit": limit},
-        timeout=30
-    )
-    resp.raise_for_status()
+    params = {"subreddit": subreddit, "sort": sort, "limit": limit}
+    logger.info(f"[fetch_and_ingest_posts] Chamando FUNCTION_URL={FUNCTION_URL} com params={params}")
+    resp = requests.get(FUNCTION_URL, params=params, timeout=30)
+    try:
+        resp.raise_for_status()
+    except Exception:
+        logger.error(f"[fetch_and_ingest_posts] Status code != 200: {resp.status_code}, body: {resp.text}")
+        resp.raise_for_status()
     data = resp.json()
-    return data.get("posts", data)
+    # Tenta extrair key "posts", mas aceita caso retorne lista diretamente
+    if isinstance(data, dict) and "posts" in data and isinstance(data["posts"], list):
+        posts = data["posts"]
+    elif isinstance(data, list):
+        posts = data
+    else:
+        # Se for dict sem "posts" ou outro formato, logue e retorne lista vazia ou o dict dentro de lista
+        logger.warning(f"[fetch_and_ingest_posts] JSON inesperado: {data!r}")
+        # tentar extrair por outra chave? aqui retornamos vazio para evitar crash
+        posts = []
+    logger.info(f"[fetch_and_ingest_posts] Recebeu {len(posts)} posts")
+    return posts
 
 def get_posts_from_cosmos(ids: list[str]):
     """
-    Chama GET_POSTS_FUNCTION_URL com query param 'ids', retorna lista de posts sanitizados do Cosmos.
-    Espera que a função responda {"posts": [...]}, onde cada elemento tem pelo menos id, subreddit, title, selftext, url.
+    Chama a Azure Function GET_POSTS com query param "ids=id1,id2,...", retorna lista de posts do Cosmos.
+    Espera que a resposta JSON seja {"posts": [...]}. 
     """
     if not GET_POSTS_FUNCTION_URL:
         raise RuntimeError("GET_POSTS_FUNCTION_URL não está configurado")
     if not ids:
         return []
-    # Monta query param: ids comma-separated
     ids_param = ",".join(ids)
+    logger.info(f"[get_posts_from_cosmos] Chamando GET_POSTS_FUNCTION_URL={GET_POSTS_FUNCTION_URL} com ids={ids_param}")
     resp = requests.get(GET_POSTS_FUNCTION_URL, params={"ids": ids_param}, timeout=30)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except Exception:
+        logger.error(f"[get_posts_from_cosmos] Status code != 200: {resp.status_code}, body: {resp.text}")
+        resp.raise_for_status()
     data = resp.json()
-    return data.get("posts", data)
+    if isinstance(data, dict) and "posts" in data and isinstance(data["posts"], list):
+        posts = data["posts"]
+    elif isinstance(data, list):
+        posts = data
+    else:
+        logger.warning(f"[get_posts_from_cosmos] JSON inesperado: {data!r}")
+        posts = []
+    logger.info(f"[get_posts_from_cosmos] Recebeu {len(posts)} posts do Cosmos")
+    return posts
 
 @app.route("/", methods=["GET"])
 def home():
-    # Ao entrar na home, limpamos sessão de pesquisas anteriores
+    # Limpa sessão de pesquisas anteriores
     session.pop("post_ids", None)
     session.pop("search_params", None)
-    return render_template("index.html", posts=None)
+    # Passa valores padrão para campos do formulário
+    return render_template("index.html", posts=None, subreddit="", sort="hot", limit=10)
 
 @app.route("/search", methods=["GET"])
 def search():
@@ -94,36 +118,51 @@ def search():
     # 1) Chama ingestão do Reddit → Cosmos
     try:
         posts = fetch_and_ingest_posts(subreddit, sort, limit)
+        logger.info(f"[SEARCH] fetch_and_ingest_posts retornou tipo {type(posts)}, len={len(posts)}")
+        if isinstance(posts, list) and posts:
+            logger.info(f"[SEARCH] Exemplos de posts: {posts[:3]!r}")
+        elif isinstance(posts, list) and not posts:
+            logger.warning("[SEARCH] fetch_and_ingest_posts retornou lista vazia")
+        else:
+            logger.warning(f"[SEARCH] fetch_and_ingest_posts retornou formato inesperado: {posts!r}")
     except Exception as e:
         logger.error(f"Erro ao obter/ingerir posts do Reddit: {e}", exc_info=True)
         flash(f"Erro ao obter posts do Reddit: {e}", "danger")
         return redirect(url_for("home"))
 
-    # 2) Extrai apenas os IDs
+    # 2) Extrai IDs válidos
     post_ids = []
-    for p in posts:
-        pid = p.get("id")
-        if pid:
-            post_ids.append(pid)
-    # Se nenhum ID, informar
+    if isinstance(posts, list):
+        for p in posts:
+            if isinstance(p, dict) and p.get("id"):
+                post_ids.append(p.get("id"))
     if not post_ids:
+        logger.warning("[SEARCH] Nenhum post com campo 'id' retornado pela ingestão.")
         flash("Nenhum post válido retornado da ingestão.", "warning")
         return redirect(url_for("home"))
 
-    # 3) Armazena IDs e parâmetros de pesquisa na sessão
+    # Salva na sessão
     session["post_ids"] = post_ids
     session["search_params"] = {"subreddit": subreddit, "sort": sort, "limit": limit}
 
-    # 4) Buscar dados completos via Cosmos (GET_POSTS_FUNCTION_URL)
+    # 3) Buscar dados completos via Cosmos
     try:
         cosmos_posts = get_posts_from_cosmos(post_ids)
+        logger.info(f"[SEARCH] get_posts_from_cosmos retornou tipo {type(cosmos_posts)}, len={len(cosmos_posts)}")
+        if isinstance(cosmos_posts, list) and cosmos_posts:
+            logger.info(f"[SEARCH] Exemplos de cosmos_posts: {cosmos_posts[:3]!r}")
+        elif isinstance(cosmos_posts, list) and not cosmos_posts:
+            logger.warning("[SEARCH] get_posts_from_cosmos retornou lista vazia; usando posts brutos como fallback")
+            cosmos_posts = posts
+        else:
+            logger.warning(f"[SEARCH] get_posts_from_cosmos retornou formato inesperado: {cosmos_posts!r}; usando posts brutos como fallback")
+            cosmos_posts = posts
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos: {e}", exc_info=True)
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
-        # Mesmo que falhe, podemos mostrar versão bruta do ingest (posts), mas ideal avisar
-        cosmos_posts = posts
+        cosmos_posts = posts  # fallback
 
-    # 5) Renderiza a página com os posts completos
+    # 4) Renderiza template com posts (pode ser lista vazia)
     return render_template("index.html", posts=cosmos_posts, subreddit=subreddit, sort=sort, limit=limit)
 
 @app.route("/detail_all", methods=["POST"])
@@ -176,10 +215,8 @@ def detail_all():
                 post['scores_raw'] = {}
         analysed_posts.append(post)
 
-    # Geração de gráficos como antes...
+    # Geração de gráfico de densidade (KDE)
     resumo_chart = None
-    wc_chart = None
-    # ... (mesmo código de KDE e WordCloud)
     try:
         total_values = neg_probs + neu_probs + pos_probs
         if len(total_values) >= 2:
@@ -228,6 +265,8 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar gráfico de densidade: %s", e, exc_info=True)
 
+    # Geração de WordCloud
+    wc_chart = None
     try:
         full_text = " ".join(text_accum).strip()
         words = re.findall(r"\w+", full_text)
@@ -340,7 +379,9 @@ def listar_ficheiros():
 
 
 if __name__ == "__main__":
+    # Logs de variáveis de ambiente para debug inicial
+    logger.info(f"Startup: FUNCTION_URL = {FUNCTION_URL}")
+    logger.info(f"Startup: GET_POSTS_FUNCTION_URL = {GET_POSTS_FUNCTION_URL}")
+    logger.info(f"Startup: CONTAINER_ENDPOINT_SAS = {CONTAINER_ENDPOINT_SAS}")
     # Em produção, substitua app.run por servidor WSGI adequado
-    logger.info(f"Valor de CONTAINER_ENDPOINT_SAS no startup: {CONTAINER_ENDPOINT_SAS}")
-    logger.info(f"Valor de GET_POSTS_FUNCTION_URL no startup: {GET_POSTS_FUNCTION_URL}")
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
