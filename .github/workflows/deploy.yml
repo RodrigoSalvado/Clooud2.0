@@ -47,6 +47,9 @@ jobs:
             sudo apt-get install -y jq
           fi
 
+      - name: Install Azure Functions Core Tools
+        run: npm install -g azure-functions-core-tools@4 --unsafe-perm true
+
       - name: (Re)Criar Resource Group se não existir
         run: |
           EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
