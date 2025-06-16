@@ -169,6 +169,19 @@ jobs:
             echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
             echo "DEBUG: fullSasUrl = $fullSasUrl"
 
+      # -> Passo inserido para obter connection string da Storage Account, necessário para AzureWebJobsStorage
+      - name: Obter connection string da Storage Account
+        id: get_storage_conn
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "Obtendo connection string da Storage Account ${STORAGE_ACCOUNT_NAME}..."
+            CONN=$(az storage account show-connection-string \
+              --name "$STORAGE_ACCOUNT_NAME" \
+              --resource-group "$RG" \
+              --query connectionString -o tsv)
+            echo "STORAGE_CONNECTION_STRING=$CONN" >> $GITHUB_OUTPUT
+
       - name: Login Docker Hub
         uses: docker/login-action@v2
         with:
