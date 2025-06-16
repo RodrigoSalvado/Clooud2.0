@@ -342,6 +342,7 @@ jobs:
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="$FUNCTION_URL_FULL" \
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
+                functionGenerateReport="$REPORT_FUNCTION_URL"
                 containerEndpointSas="$SAS_FULL" \
               --only-show-errors
             echo "Web App deployment concluído."
