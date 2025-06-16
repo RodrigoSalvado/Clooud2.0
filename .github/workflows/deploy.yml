@@ -344,7 +344,6 @@ jobs:
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
                 functionGenerateReport="$REPORT_FUNCTION_URL"
                 containerEndpointSas="$SAS_FULL" \
-              --only-show-errors
             echo "Web App deployment concluído."
 
       - name: Reiniciar Web App e Function App após deploy
