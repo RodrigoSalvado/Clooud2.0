@@ -169,15 +169,6 @@ jobs:
             echo "CONTAINER_ENDPOINT_SAS=$fullSasUrl" >> $GITHUB_OUTPUT
             echo "DEBUG: fullSasUrl = $fullSasUrl"
 
-      - name: Obter connection string da Storage Account
-        id: get_storage_conn
-        run: |
-          CONN=$(az storage account show-connection-string \
-            --name "$STORAGE_ACCOUNT_NAME" \
-            --resource-group "$RG" \
-            --query connectionString -o tsv)
-          echo "STORAGE_CONNECTION_STRING=$CONN" >> $GITHUB_OUTPUT
-
       - name: Login Docker Hub
         uses: docker/login-action@v2
         with:
@@ -214,7 +205,6 @@ jobs:
                 redditPassword="${REDDIT_PASSWORD}" \
                 clientIdValue="${CLIENT_ID}" \
                 secretValue="${CLIENT_SECRET}" \
-                containerEndpointSas="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
                 translatorEndpoint="" \
                 translatorKey="" \
               --only-show-errors
@@ -250,17 +240,16 @@ jobs:
               --settings \
                 FUNCTIONS_WORKER_RUNTIME=python \
                 FUNCTIONS_EXTENSION_VERSION="~4" \
-                AzureWebJobsStorage="${{ steps.get_storage_conn.outputs.STORAGE_CONNECTION_STRING }}" \
-                COSMOS_ENDPOINT="$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RG --query documentEndpoint -o tsv)" \
-                COSMOS_KEY="$(az cosmosdb keys list --name $COSMOS_ACCOUNT_NAME --resource-group $RG --query primaryMasterKey -o tsv)" \
-                COSMOS_DATABASE="RedditApp" \
-                COSMOS_CONTAINER="posts" \
-                REDDIT_USER="${REDDIT_USER}" \
-                REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
-                CLIENT_ID="${CLIENT_ID}" \
-                SECRET="${CLIENT_SECRET}" \
+                # Se desejar, defina variáveis de ambiente específicas aqui:
+                # COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
+                # COSMOS_KEY="<sua-chave-cosmos>" \
+                # COSMOS_DATABASE="RedditApp" \
+                # COSMOS_CONTAINER="posts" \
+                # REDDIT_USER="${REDDIT_USER}" \
+                # REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
+                # CLIENT_ID="${CLIENT_ID}" \
+                # SECRET="${CLIENT_SECRET}" \
                 WEBSITE_RUN_FROM_PACKAGE=1 \
-                CONTAINER_ENDPOINT_SAS="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}" \
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
             az functionapp deployment source config-zip \
@@ -303,13 +292,12 @@ jobs:
           if [ -z "$FUNCTION_KEY" ]; then
             echo "WARNING: FUNCTION_KEY está vazio!"
           fi
-          FUNCTION_KEY="${{ steps.get_function_key.outputs.FUNCTION_KEY }}"
           FUNCTION_URL_FULL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/search?code=${FUNCTION_KEY}"
           GET_POSTS_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/getposts?code=${FUNCTION_KEY}"
-          REPORT_FUNCTION_URL="https://${FUNCTIONAPP_NAME}.azurewebsites.net/api/GenerateReport?code=${FUNCTION_KEY}"
           echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
           echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
-          echo "REPORT_FUNCTION_URL=$REPORT_FUNCTION_URL" >> $GITHUB_OUTPUT
+          echo "DEBUG: FUNCTION_URL_FULL = $FUNCTION_URL_FULL"
+          echo "DEBUG: GET_POSTS_FUNCTION_URL = $GET_POSTS_FUNCTION_URL"
 
       - name: Deploy Web App com Function URL e CONTAINER_ENDPOINT_SAS via CLI + Bicep
         uses: azure/cli@v1
@@ -318,10 +306,9 @@ jobs:
             SAS_FULL="${{ steps.gen_sas.outputs.CONTAINER_ENDPOINT_SAS }}"
             FUNCTION_URL_FULL="${{ steps.set_function_url.outputs.FUNCTION_URL_FULL }}"
             GET_POSTS_FUNCTION_URL="${{ steps.set_function_url.outputs.GET_POSTS_FUNCTION_URL }}"
-            REPORT_FUNCTION_URL="${{ steps.set_function_url.outputs.REPORT_FUNCTION_URL }}"
-            echo "FUNCTION_URL_FULL=$FUNCTION_URL_FULL" >> $GITHUB_OUTPUT
-            echo "GET_POSTS_FUNCTION_URL=$GET_POSTS_FUNCTION_URL" >> $GITHUB_OUTPUT
-            echo "REPORT_FUNCTION_URL=$REPORT_FUNCTION_URL" >> $GITHUB_OUTPUT
+            echo "DEBUG: SAS_FULL para deploy do Web App: $SAS_FULL"
+            echo "DEBUG: FUNCTION_URL_FULL: $FUNCTION_URL_FULL"
+            echo "DEBUG: GET_POSTS_FUNCTION_URL: $GET_POSTS_FUNCTION_URL"
             if [ -z "$FUNCTION_URL_FULL" ] || [ -z "$GET_POSTS_FUNCTION_URL" ]; then
               echo "ERRO: As URLs das functions estão vazias. Verifique a etapa anterior."
               exit 1
@@ -334,7 +321,6 @@ jobs:
                 CONTAINER_ENDPOINT_SAS="$SAS_FULL" \
                 FUNCTION_URL="$FUNCTION_URL_FULL" \
                 GET_POSTS_FUNCTION_URL="$GET_POSTS_FUNCTION_URL"
-                REPORT_FUNCTION_URL="$REPORT_FUNCTION_URL"
 
             echo "Iniciando deploy Web App ($WEBAPP_NAME) via Bicep..."
             az deployment group create \
@@ -353,7 +339,6 @@ jobs:
                 containerSasToken="${{ steps.gen_sas.outputs.SAS_TOKEN }}" \
                 functionUrl="$FUNCTION_URL_FULL" \
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
-                functionGenerateReport="$REPORT_FUNCTION_URL" \
                 containerEndpointSas="$SAS_FULL" \
               --only-show-errors
             echo "Web App deployment concluído."
