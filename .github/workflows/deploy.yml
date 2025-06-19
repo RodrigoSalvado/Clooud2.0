@@ -42,23 +42,32 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Instalar jq (no runner) para JSON parsing
-        run: |
-          if ! command -v jq &>/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
+      - name: Setup Node.js & Func Tools
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
-      - name: (Re)Criar Resource Group se não existir
+      - name: Instalar Azure Functions Core Tools
         run: |
-          echo "Verificando existência do Resource Group $RG..."
-          EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
-          if [ -z "$EXISTE_RG_JSON" ]; then
-            echo "Criando Resource Group '$RG' em $TARGET_LOCATION..."
-            az group create --name "$RG" --location "$TARGET_LOCATION"
-          else
-            echo "Resource Group '$RG' já existe em $TARGET_LOCATION. Continuando."
-          fi
+          npm install -g azure-functions-core-tools@4 --unsafe-perm true
+
+            - name: Instalar jq (no runner) para JSON parsing
+              run: |
+                if ! command -v jq &>/dev/null; then
+                  sudo apt-get update
+                  sudo apt-get install -y jq
+                fi
+
+            - name: (Re)Criar Resource Group se não existir
+              run: |
+                echo "Verificando existência do Resource Group $RG..."
+                EXISTE_RG_JSON=$(az group show --name "$RG" -o json 2>/dev/null || echo "")
+                if [ -z "$EXISTE_RG_JSON" ]; then
+                  echo "Criando Resource Group '$RG' em $TARGET_LOCATION..."
+                  az group create --name "$RG" --location "$TARGET_LOCATION"
+                else
+                  echo "Resource Group '$RG' já existe em $TARGET_LOCATION. Continuando."
+                fi
 
       - name: Validar templates Bicep localmente
         run: |
@@ -218,13 +227,12 @@ jobs:
           echo "Conteúdo de ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
           ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
 
-      - name: Deploy Function App via func publish
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            echo "Publicar a Function App com Core Tools (func)..."
-            npm install -g azure-functions-core-tools@4 --unsafe-perm true
-            func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build remote
+      - name: Publish Function App com func
+        run: |
+          npm install -g azure-functions-core-tools@4 --unsafe-perm true
+          cd redditIngestFunc
+          func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build remote
+
 
       - name: Aguardar indexação e obter master key da Function App
         id: get_function_key
