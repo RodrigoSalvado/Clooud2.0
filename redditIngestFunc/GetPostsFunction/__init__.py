@@ -166,30 +166,30 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
                 failed.append({"id": item_id, "error": "Faltam campos obrigatórios."})
                 continue
 
-            # 🗝️ Busca PK REAL com query cross-partition
+            # 👇 Consulta o PK real do item
             pk_query = list(container.query_items(
                 query="SELECT VALUE c.subreddit FROM c WHERE c.id = @id",
                 parameters=[{"name": "@id", "value": item_id}],
                 enable_cross_partition_query=True
             ))
-            if not pk_query:
+            if pk_query:
+                subreddit_pk = pk_query[0].strip()
+                logging.info(f"PK real para {item_id} = '{subreddit_pk}'")
+            else:
                 failed.append({"id": item_id, "error": "Item não encontrado para confirmar PK."})
                 continue
 
-            subreddit_pk = pk_query[0].strip()
-            logging.info(f"🔑 Confirmação: ID={item_id} usa PK='{subreddit_pk}'")
-
+            # 👇 Lê com o PK real
             item = container.read_item(item=item_id, partition_key=subreddit_pk)
             item["confiabilidade"] = confiabilidade
             item["sentimento"] = sentimento
 
             container.replace_item(item=item_id, body=item)
-            logging.info(f"✅ Actualizado: {item_id}")
             success.append(item_id)
 
         except Exception as e:
-            logging.error(f"Erro ao actualizar ID {item_id}: {e}", exc_info=True)
-            failed.append({"id": item_id, "error": str(e)})
+            logging.error(f"Erro ao actualizar ID {update.get('id')}: {e}", exc_info=True)
+            failed.append({"id": update.get("id"), "error": str(e)})
 
     return func.HttpResponse(
         json.dumps({"actualizados": success, "falhados": failed}, ensure_ascii=False),
