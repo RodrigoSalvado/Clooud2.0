@@ -237,20 +237,11 @@ jobs:
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
-              --settings \
-                FUNCTIONS_WORKER_RUNTIME=python \
-                FUNCTIONS_EXTENSION_VERSION="~4" \
-                # Se desejar, defina variáveis de ambiente específicas aqui:
-                # COSMOS_ENDPOINT="<seu-endpoint-cosmos>" \
-                # COSMOS_KEY="<sua-chave-cosmos>" \
-                # COSMOS_DATABASE="RedditApp" \
-                # COSMOS_CONTAINER="posts" \
-                # REDDIT_USER="${REDDIT_USER}" \
-                # REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
-                # CLIENT_ID="${CLIENT_ID}" \
-                # SECRET="${CLIENT_SECRET}" \
-                WEBSITE_RUN_FROM_PACKAGE=1 \
-                SCM_DO_BUILD_DURING_DEPLOYMENT=true
+              az functionapp config appsettings set \
+              --resource-group "$RG" \
+              --name "$FUNCTIONAPP_NAME" \
+              --settings FUNCTIONS_WORKER_RUNTIME=python FUNCTIONS_EXTENSION_VERSION="~4" WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true 
+
 
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
