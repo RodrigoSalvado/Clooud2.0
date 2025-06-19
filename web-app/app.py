@@ -32,7 +32,6 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 FUNCTION_URL = os.getenv("FUNCTION_URL")        # e.g. https://<sua-func>.azurewebsites.net/api/search?code=...
 GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")  # e.g. https://<sua-func>.azurewebsites.net/api/getposts?code=...
 CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")  # e.g. https://<storage>.blob.core.windows.net/<container>?<sas>
-REPORT_FUNCTION_URL = os.getenv("REPORT_FUNCTION_URL")
 
 from markupsafe import Markup
 
@@ -493,6 +492,34 @@ def listar_ficheiros():
         logger.error("Erro ao listar ficheiros: %s", e, exc_info=True)
         flash(f"Erro ao listar ficheiros: {e}", "danger")
         return redirect(url_for("home"))
+
+@app.route("/apagar_ficheiro", methods=["POST"])
+def apagar_ficheiro():
+    if not CONTAINER_ENDPOINT_SAS:
+        flash("CONTAINER_ENDPOINT_SAS inválido ou ausente.", "danger")
+        return redirect(url_for("listar_ficheiros"))
+
+    ficheiro = request.form.get("ficheiro")
+    if not ficheiro:
+        flash("Nenhum ficheiro especificado para apagar.", "warning")
+        return redirect(url_for("listar_ficheiros"))
+
+    try:
+        sas_parts = CONTAINER_ENDPOINT_SAS.split('?', 1)
+        sas_base = sas_parts[0]
+        sas_token = sas_parts[1] if len(sas_parts) > 1 else ""
+
+        blob_url = f"{sas_base}/{ficheiro}?{sas_token}"
+        blob_client = BlobClient.from_blob_url(blob_url)
+
+        blob_client.delete_blob()
+        flash(f"Ficheiro '{ficheiro}' apagado com sucesso.", "success")
+    except Exception as e:
+        logger.error(f"Erro ao apagar ficheiro '{ficheiro}': {e}", exc_info=True)
+        flash(f"Erro ao apagar ficheiro: {e}", "danger")
+
+    return redirect(url_for("listar_ficheiros"))
+
 
 if __name__ == "__main__":
     # Logs de variáveis de ambiente para debug inicial
