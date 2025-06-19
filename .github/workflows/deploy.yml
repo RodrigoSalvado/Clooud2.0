@@ -234,14 +234,11 @@ jobs:
         with:
           inlineScript: |
             echo "Configurando runtime e deploy das Functions..."
+
             az functionapp config appsettings set \
               --resource-group "$RG" \
               --name "$FUNCTIONAPP_NAME" \
-              az functionapp config appsettings set \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --settings FUNCTIONS_WORKER_RUNTIME=python FUNCTIONS_EXTENSION_VERSION="~4" WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true 
-
+              --settings FUNCTIONS_WORKER_RUNTIME=python FUNCTIONS_EXTENSION_VERSION="~4" WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
             az functionapp deployment source config-zip \
               --resource-group "$RG" \
