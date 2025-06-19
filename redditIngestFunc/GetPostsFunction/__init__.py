@@ -130,7 +130,7 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
 
     if not isinstance(data, dict) or "updates" not in data or not isinstance(data["updates"], list):
         return func.HttpResponse(
-            json.dumps({"error": "Formato esperado: {\"updates\": [{\"id\": \"subreddit_xxx\", \"confiabilidade\": valor, \"sentimento\": valor}, ...]}"}),
+            json.dumps({"error": "Formato esperado: {\"updates\": [{\"id\": \"subreddit_xxx\", \"confiabilidade\": valor, \"sentimento\": valor}]}"}),
             status_code=400,
             mimetype="application/json"
         )
@@ -166,37 +166,30 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
                 failed.append({"id": item_id, "error": "Faltam campos obrigatórios."})
                 continue
 
-            if "_" not in item_id:
-                failed.append({"id": item_id, "error": "ID inválido."})
-                continue
-
-            subreddit_pk, _ = item_id.split("_", 1)
-            subreddit_pk = subreddit_pk.strip()
-
-            # Verifica PK real do item para garantir 100%
-            logging.info(f"🔍 Confirma PK real para ID={item_id}...")
+            # 🗝️ Busca PK REAL com query cross-partition
             pk_query = list(container.query_items(
                 query="SELECT VALUE c.subreddit FROM c WHERE c.id = @id",
                 parameters=[{"name": "@id", "value": item_id}],
                 enable_cross_partition_query=True
             ))
-            if pk_query:
-                subreddit_pk = pk_query[0].strip()
-            else:
+            if not pk_query:
                 failed.append({"id": item_id, "error": "Item não encontrado para confirmar PK."})
                 continue
 
-            logging.info(f"📌 Tentar read_item: ID={item_id} | PK='{subreddit_pk}'")
+            subreddit_pk = pk_query[0].strip()
+            logging.info(f"🔑 Confirmação: ID={item_id} usa PK='{subreddit_pk}'")
+
             item = container.read_item(item=item_id, partition_key=subreddit_pk)
             item["confiabilidade"] = confiabilidade
             item["sentimento"] = sentimento
 
             container.replace_item(item=item_id, body=item)
+            logging.info(f"✅ Actualizado: {item_id}")
             success.append(item_id)
 
         except Exception as e:
-            logging.error(f"Erro ao actualizar ID {update.get('id')}: {e}", exc_info=True)
-            failed.append({"id": update.get("id"), "error": str(e)})
+            logging.error(f"Erro ao actualizar ID {item_id}: {e}", exc_info=True)
+            failed.append({"id": item_id, "error": str(e)})
 
     return func.HttpResponse(
         json.dumps({"actualizados": success, "falhados": failed}, ensure_ascii=False),
