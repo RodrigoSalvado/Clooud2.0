@@ -201,31 +201,14 @@ def search():
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
-    # Tentar ler IDs vindos do form: espera que o template use post.full_id como value
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
-        # Log dos IDs vindos do form
-        max_show = 20
-        if len(post_ids) > max_show:
-            logger.info(f"[DETAIL_ALL] IDs vindos do form (mostrando apenas {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
-        else:
-            logger.info(f"[DETAIL_ALL] IDs vindos do form: {post_ids}")
         session["post_ids"] = post_ids
     else:
-        # Fallback para sessão
         post_ids = session.get("post_ids", [])
-        if post_ids:
-            max_show = 20
-            if len(post_ids) > max_show:
-                logger.info(f"[DETAIL_ALL] IDs vindos da sessão (mostrando apenas {max_show} primeiros de {len(post_ids)}): {post_ids[:max_show]} ...")
-            else:
-                logger.info(f"[DETAIL_ALL] IDs vindos da sessão: {post_ids}")
-        else:
-            logger.info("[DETAIL_ALL] Nenhum post_ids encontrado na sessão.")
 
     if not post_ids:
-        logger.warning("[DETAIL_ALL] Nenhum post disponível para análise (post_ids vazio).")
         flash("Nenhum post disponível para análise.", "warning")
         return redirect(url_for("home"))
 
@@ -233,103 +216,98 @@ def detail_all():
         flash("Pipeline de sentimento não está disponível.", "danger")
         return redirect(url_for("home"))
 
-    # 1) Obter dados do Cosmos para cada ID completo
     try:
         posts = get_posts_from_cosmos(post_ids)
-        logger.info(f"[DETAIL_ALL] get_posts_from_cosmos retornou len={len(posts)}")
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos em detail_all: {e}", exc_info=True)
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
         posts = []
 
-    # 2) Se não encontrou nada no Cosmos, faz fallback usando posts brutos em sessão
     if not posts:
-        logger.warning("[DETAIL_ALL] get_posts_from_cosmos retornou vazio; usando posts brutos da sessão para análise.")
         raw_posts = session.get("posts_raw", [])
         filtered = []
         for p in raw_posts:
-            full = p.get("full_id")
-            if full and full in post_ids:
+            if p.get('full_id') in post_ids:
                 filtered.append(p.copy())
         posts = filtered
-        logger.info(f"[DETAIL_ALL] posts brutos filtrados para análise: {len(posts)}")
 
     if not posts:
-        logger.warning("[DETAIL_ALL] Ainda não há posts para analisar (nem no Cosmos nem no fallback).")
-        flash("Não há posts disponíveis para análise de sentimento.", "warning")
+        flash("Não há posts para análise.", "warning")
         return redirect(url_for("home"))
 
     analysed_posts = []
-    os.makedirs("static", exist_ok=True)
+    updates_payload = []
     text_accum = []
     neg_probs, neu_probs, pos_probs = [], [], []
 
-    # ===== Modificação: processamento em lote (batch) =====
-    # Prepara lista de snippets e índices para mapear resultados
     texts = []
-    posts_index = []  # índices em 'posts' que têm texto a analisar
+    posts_index = []
     for idx, post in enumerate(posts):
         snippet = post.get('selftext', '').strip() or post.get('title', '').strip()
         if snippet:
-            # Trunca para não exceder limite de tokens
             if len(snippet) > 512:
                 snippet = snippet[:512]
             texts.append(snippet)
             posts_index.append(idx)
         else:
-            # marca posts sem texto
             post['sentimento'] = 'Unknown'
             post['probabilidade'] = 0
-            post['scores_raw'] = {}
             analysed_posts.append(post)
 
-    # Processa em batches
-    batch_size = 16  # ajuste conforme memória/dispositivo
+    batch_size = 16
     for start in range(0, len(texts), batch_size):
         batch_texts = texts[start:start+batch_size]
-        # chamar o modelo em lote
         try:
             results = classifier(batch_texts, truncation=True)
-            # results é lista de dicts [{'label':..., 'score':...}, ...]
         except Exception as e:
             logger.error(f"Erro no batch de sentimento: {e}", exc_info=True)
-            # fallback: processar individualmente
-            results = []
-            for txt in batch_texts:
-                try:
-                    res = classifier(txt)
-                    if isinstance(res, list) and res:
-                        results.append(res[0])
-                    else:
-                        results.append({})
-                except Exception as e2:
-                    logger.error(f"Fallback erro individual: {e2}", exc_info=True)
-                    results.append({})
+            results = [{} for _ in batch_texts]
 
-        # Mapeia resultados de volta aos posts
         for j, res in enumerate(results):
             post_idx = posts_index[start + j]
             post = posts[post_idx]
-            label = res.get('label', '') or ''
+            label = res.get('label', 'Unknown')
             score = res.get('score', 0.0)
-            label_lower = label.lower() if isinstance(label, str) else ''
             label_cap = label.capitalize() if isinstance(label, str) else 'Unknown'
+            prob = int(score * 100)
+
             post['sentimento'] = label_cap
-            post['probabilidade'] = int(score * 100)
-            post['scores_raw'] = {label_lower: score} if label_lower else {}
-            # preencher listas para gráfico KDE
+            post['probabilidade'] = prob
+
+            # Prepara update para a Function
+            full_id = post.get('id') or post.get('full_id')
+            updates_payload.append({
+                "id": full_id,
+                "confiabilidade": round(score, 4),
+                "sentimento": label_cap
+            })
+
+            label_lower = label.lower()
             if label_lower == 'negative':
-                neg_probs.append(score * 100)
+                neg_probs.append(prob)
             elif label_lower == 'positive':
-                pos_probs.append(score * 100)
+                pos_probs.append(prob)
             else:
-                neu_probs.append(score * 100)
-            text_accum.append(texts[start + j])
+                neu_probs.append(prob)
+            text_accum.append(batch_texts[j])
+
             analysed_posts.append(post)
 
-    # ===== Fim modificação =====
+    # === Envia updates para a Azure Function (PUT) ===
+    if updates_payload and GET_POSTS_FUNCTION_URL:
+        try:
+            resp = requests.put(
+                GET_POSTS_FUNCTION_URL,
+                json={"updates": updates_payload},
+                timeout=30
+            )
+            resp.raise_for_status()
+            logger.info(f"PUT para Function concluído: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Falhou PUT para Function: {e}", exc_info=True)
+            flash(f"Falhou guardar sentimento/confiabilidade no Cosmos DB: {e}", "danger")
 
-    # Geração de gráfico de densidade (KDE)
+    # === Geração de gráfico de densidade (KDE) ===
     resumo_chart = None
     try:
         total_values = neg_probs + neu_probs + pos_probs
@@ -337,40 +315,25 @@ def detail_all():
             x = np.linspace(0, 100, 500)
             plt.figure(figsize=(8, 4))
             plotted = False
-            if len(neg_probs) > 1 and any(neg_probs):
-                try:
-                    kde_neg = gaussian_kde(neg_probs)
-                    y_neg = kde_neg(x)
-                    y_neg = y_neg / y_neg.sum() * 100
-                    plt.plot(x, y_neg, label="Negative", linewidth=2)
-                    plt.fill_between(x, y_neg, alpha=0.2)
-                    plotted = True
-                except Exception as e:
-                    logger.warning("Falha ao gerar KDE para negativos: %s", e)
-            if len(neu_probs) > 1 and any(neu_probs):
-                try:
-                    kde_neu = gaussian_kde(neu_probs)
-                    y_neu = kde_neu(x)
-                    y_neu = y_neu / y_neu.sum() * 100
-                    plt.plot(x, y_neu, label="Neutral", linewidth=2)
-                    plt.fill_between(x, y_neu, alpha=0.2)
-                    plotted = True
-                except Exception as e:
-                    logger.warning("Falha ao gerar KDE para neutros: %s", e)
-            if len(pos_probs) > 1 and any(pos_probs):
-                try:
-                    kde_pos = gaussian_kde(pos_probs)
-                    y_pos = kde_pos(x)
-                    y_pos = y_pos / y_pos.sum() * 100
-                    plt.plot(x, y_pos, label="Positive", linewidth=2)
-                    plt.fill_between(x, y_pos, alpha=0.2)
-                    plotted = True
-                except Exception as e:
-                    logger.warning("Falha ao gerar KDE para positivos: %s", e)
+            if len(neg_probs) > 1:
+                kde_neg = gaussian_kde(neg_probs)
+                y_neg = kde_neg(x)
+                plt.plot(x, y_neg, label="Negative")
+                plotted = True
+            if len(neu_probs) > 1:
+                kde_neu = gaussian_kde(neu_probs)
+                y_neu = kde_neu(x)
+                plt.plot(x, y_neu, label="Neutral")
+                plotted = True
+            if len(pos_probs) > 1:
+                kde_pos = gaussian_kde(pos_probs)
+                y_pos = kde_pos(x)
+                plt.plot(x, y_pos, label="Positive")
+                plotted = True
             if plotted:
-                plt.xlabel("Confiança da Análise (%)")
-                plt.ylabel("Distribuição Normalizada (%)")
-                plt.title("Distribuição e Densidade de Confiança por Sentimento")
+                plt.xlabel("Confiança (%)")
+                plt.ylabel("Densidade")
+                plt.title("Distribuição de Confiança por Sentimento")
                 plt.legend()
                 plt.tight_layout()
                 resumo_chart = "static/distribuicao_confianca.png"
@@ -379,32 +342,30 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar gráfico de densidade: %s", e, exc_info=True)
 
-    # Geração de WordCloud
+    # === Geração de WordCloud ===
     wc_chart = None
     try:
-        full_text = " ".join(text_accum).strip()
-        words = re.findall(r"\w+", full_text)
-        filtered_words = [w for w in words if w.lower() not in STOPWORDS]
-        if filtered_words:
-            wordcloud = WordCloud(width=700, height=350, background_color="white",
-                                  stopwords=set(STOPWORDS)).generate(" ".join(filtered_words))
-            plt.figure(figsize=(7, 3.5))
-            plt.imshow(wordcloud, interpolation="bilinear")
-            plt.axis("off")
-            plt.tight_layout()
-            wc_chart = "static/nuvem_palavras_all.png"
-            plt.savefig(wc_chart, dpi=200)
-            plt.close()
+        full_text = " ".join(text_accum)
+        wordcloud = WordCloud(width=700, height=350, background_color="white",
+                              stopwords=set(STOPWORDS)).generate(full_text)
+        plt.figure(figsize=(7, 3.5))
+        plt.imshow(wordcloud, interpolation="bilinear")
+        plt.axis("off")
+        plt.tight_layout()
+        wc_chart = "static/nuvem_palavras_all.png"
+        plt.savefig(wc_chart, dpi=200)
+        plt.close()
     except Exception as e:
         logger.error("Erro ao gerar wordcloud: %s", e, exc_info=True)
 
-    logger.info(f"[DETAIL_ALL] Análise concluída para {len(analysed_posts)} posts, renderizando template")
+    logger.info("[DETAIL_ALL] Análise concluída, dados actualizados no Cosmos DB e gráficos gerados.")
     return render_template(
         "detail_all.html",
         posts=analysed_posts,
         resumo_chart=resumo_chart,
         wc_chart=wc_chart
     )
+
 
 @app.route("/gerar_relatorio", methods=["POST"])
 def gerar_relatorio():

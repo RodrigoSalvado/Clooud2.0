@@ -4,13 +4,11 @@ import os
 import json
 from azure.cosmos import CosmosClient
 
-# Configuração Cosmos (lê das Application Settings da Function App)
 COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
 COSMOS_KEY = os.getenv("COSMOS_KEY")
 COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "RedditApp")
 COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER", "posts")
 
-# Inicialização do client Cosmos (pode ser global para reuso entre invocações)
 cosmos_client = None
 cosmos_container = None
 
@@ -18,7 +16,7 @@ def get_cosmos_container():
     global cosmos_client, cosmos_container
     if cosmos_client is None:
         if not COSMOS_ENDPOINT or not COSMOS_KEY:
-            logging.error("COSMOS_ENDPOINT ou COSMOS_KEY não definidos na Function GetPostsFunction.")
+            logging.error("COSMOS_ENDPOINT ou COSMOS_KEY não definidos.")
             raise RuntimeError("Configuração do Cosmos DB ausente.")
         cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
         db_client = cosmos_client.get_database_client(COSMOS_DATABASE)
@@ -26,14 +24,24 @@ def get_cosmos_container():
     return cosmos_container
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info("GetPostsFunction recebida.")
+    logging.info("Função HTTP recebida.")
 
-    # Exemplo: IDs podem vir via query param ?ids=id1,id2,id3 ou via body JSON { "ids": ["id1", ...] }
+    if req.method == "GET":
+        return handle_get(req)
+    elif req.method == "PUT":
+        return handle_put(req)
+    else:
+        return func.HttpResponse(
+            json.dumps({"error": "Método não suportado. Usa GET ou PUT."}),
+            status_code=405,
+            mimetype="application/json"
+        )
+
+def handle_get(req: func.HttpRequest) -> func.HttpResponse:
     ids = []
     try:
         ids_param = req.params.get("ids")
         if ids_param:
-            # separar por vírgula
             ids = [i.strip() for i in ids_param.split(",") if i.strip()]
         else:
             try:
@@ -49,6 +57,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             status_code=400,
             mimetype="application/json"
         )
+
     if not ids:
         return func.HttpResponse(
             json.dumps({"error": "É preciso informar lista de IDs, ex: ?ids=subreddit_abc,subreddit_def"}),
@@ -66,34 +75,110 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    results = []
+    partitioned = {}
     for item_id in ids:
-        # extrair partition key (subreddit) a partir do ID: prefix antes de "_" 
         if "_" not in item_id:
-            logging.warning(f"ID inválido/no formato esperado: {item_id}, pulando.")
+            logging.warning(f"ID inválido: {item_id}, ignorado.")
             continue
         subreddit_pk, _ = item_id.split("_", 1)
+        partitioned.setdefault(subreddit_pk, []).append(item_id)
+
+    results = []
+    for subreddit, id_list in partitioned.items():
         try:
-            item = container.read_item(item=item_id, partition_key=subreddit_pk)
-            # opcional: sanitize fields antes de retornar
-            sanitized = {
-                "id": item.get("id"),
-                "subreddit": item.get("subreddit"),
-                "title": item.get("title"),
-                "selftext": item.get("selftext"),
-                "url": item.get("url"),
-                # quaisquer outros campos necessários
-            }
-            results.append(sanitized)
+            query = f"SELECT * FROM c WHERE c.id IN ({','.join(['@id'+str(i) for i in range(len(id_list))])})"
+            parameters = [{"name": "@id"+str(i), "value": id_val} for i, id_val in enumerate(id_list)]
+            items = list(container.query_items(
+                query=query,
+                parameters=parameters,
+                partition_key=subreddit
+            ))
+            for item in items:
+                sanitized = {
+                    "id": item.get("id"),
+                    "subreddit": item.get("subreddit"),
+                    "title": item.get("title"),
+                    "selftext": item.get("selftext"),
+                    "url": item.get("url"),
+                }
+                results.append(sanitized)
         except Exception as e:
-            logging.error(f"Erro ao ler item {item_id}: {e}", exc_info=True)
-            # opcional: incluir um aviso no retorno
-            # results.append({"id": item_id, "error": str(e)})
+            logging.error(f"Erro na query para subreddit {subreddit}: {e}", exc_info=True)
             continue
 
-    # Retorna JSON com lista de posts
     return func.HttpResponse(
         json.dumps({"posts": results}, ensure_ascii=False),
+        status_code=200,
+        mimetype="application/json"
+    )
+
+def handle_put(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        data = req.get_json()
+    except Exception:
+        return func.HttpResponse(
+            json.dumps({"error": "Corpo JSON inválido."}),
+            status_code=400,
+            mimetype="application/json"
+        )
+
+    if not isinstance(data, dict) or "updates" not in data or not isinstance(data["updates"], list):
+        return func.HttpResponse(
+            json.dumps({"error": "Formato esperado: {\"updates\": [{\"id\": \"subreddit_xxx\", \"confiabilidade\": valor, \"sentimento\": valor}, ...]}"}),
+            status_code=400,
+            mimetype="application/json"
+        )
+
+    updates = data["updates"]
+    if not updates:
+        return func.HttpResponse(
+            json.dumps({"error": "Lista de updates vazia."}),
+            status_code=400,
+            mimetype="application/json"
+        )
+
+    try:
+        container = get_cosmos_container()
+    except Exception as e:
+        logging.error(f"Falha ao conectar ao Cosmos: {e}", exc_info=True)
+        return func.HttpResponse(
+            json.dumps({"error": "Falha na configuração do Cosmos DB."}),
+            status_code=500,
+            mimetype="application/json"
+        )
+
+    success = []
+    failed = []
+
+    for update in updates:
+        try:
+            item_id = update.get("id")
+            confiabilidade = update.get("confiabilidade")
+            sentimento = update.get("sentimento")
+
+            if not item_id or confiabilidade is None or sentimento is None:
+                failed.append({"id": item_id, "error": "Faltam campos obrigatórios."})
+                continue
+
+            if "_" not in item_id:
+                failed.append({"id": item_id, "error": "ID inválido."})
+                continue
+
+            subreddit_pk, _ = item_id.split("_", 1)
+
+            item = container.read_item(item=item_id, partition_key=subreddit_pk)
+            item["confiabilidade"] = confiabilidade
+            item["sentimento"] = sentimento
+
+            container.replace_item(item=item_id, body=item)
+            success.append(item_id)
+
+        except Exception as e:
+            logging.error(f"Erro ao actualizar ID {update.get('id')}: {e}", exc_info=True)
+            failed.append({"id": update.get("id"), "error": str(e)})
+
+    return func.HttpResponse(
+        json.dumps({"actualizados": success, "falhados": failed}, ensure_ascii=False),
         status_code=200,
         mimetype="application/json"
     )
