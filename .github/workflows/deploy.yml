@@ -218,41 +218,13 @@ jobs:
           echo "Conteúdo de ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
           ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
 
-      - name: Empacotar código da Function App para Zip Deploy
-        run: |
-          echo "Empacotando código das Azure Functions em ${AZURE_FUNCTIONAPP_PACKAGE_PATH}..."
-          cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-          echo "Listando antes do zip:"
-          ls -R .
-          echo "Zipando..."
-          zip -r ../funcapp.zip .
-          echo "Listando conteúdo do zip:"
-          unzip -l ../funcapp.zip
-
-      - name: Deploy Function App via Zip Deploy
+      - name: Deploy Function App via func publish
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "Configurando runtime e deploy das Functions..."
-
-            az functionapp config appsettings set \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --settings FUNCTIONS_WORKER_RUNTIME=python FUNCTIONS_EXTENSION_VERSION="~4" WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=true
-
-            az functionapp deployment source config-zip \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              --src "$GITHUB_WORKSPACE/funcapp.zip" \
-              --only-show-errors
-
-            echo "Aguardando indexação das funções..."
-            sleep 20
-            echo "Funções publicadas na Function App (via Azure CLI):"
-            az functionapp function list \
-              --resource-group "$RG" \
-              --name "$FUNCTIONAPP_NAME" \
-              -o table
+            echo "Publicar a Function App com Core Tools (func)..."
+            npm install -g azure-functions-core-tools@4 --unsafe-perm true
+            func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build remote
 
       - name: Aguardar indexação e obter master key da Function App
         id: get_function_key
