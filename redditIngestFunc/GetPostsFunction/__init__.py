@@ -28,11 +28,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     if req.method == "GET":
         return handle_get(req)
-    elif req.method == "PUT":
-        return handle_put(req)
+    elif req.method == "POST":
+        return handle_post(req)
     else:
         return func.HttpResponse(
-            json.dumps({"error": "Método não suportado. Usa GET ou PUT."}),
+            json.dumps({"error": "Método não suportado. Usa GET ou POST."}),
             status_code=405,
             mimetype="application/json"
         )
@@ -112,7 +112,7 @@ def handle_get(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
-def handle_put(req: func.HttpRequest) -> func.HttpResponse:
+def handle_post(req: func.HttpRequest) -> func.HttpResponse:
     try:
         data = req.get_json()
     except Exception:
