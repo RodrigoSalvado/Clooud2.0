@@ -166,6 +166,13 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
 
             subreddit_pk, _ = item_id.split("_", 1)
 
+            # 🔑 Logging explícito para debug:
+            logging.info(f"📌 Tentar ler: ID={item_id} | PK={subreddit_pk}")
+
+            # 🔑 Normalizar PK (tira espaços)
+            subreddit_pk = subreddit_pk.strip()
+
+            # Leitura e update:
             item = container.read_item(item=item_id, partition_key=subreddit_pk)
             item["confiabilidade"] = confiabilidade
             item["sentimento"] = sentimento
