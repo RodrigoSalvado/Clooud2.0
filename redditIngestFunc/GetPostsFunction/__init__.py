@@ -4,6 +4,7 @@ import os
 import json
 from azure.cosmos import CosmosClient
 
+# === Configuração ===
 COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
 COSMOS_KEY = os.getenv("COSMOS_KEY")
 COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "RedditApp")
@@ -11,6 +12,7 @@ COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER", "posts")
 
 cosmos_client = None
 cosmos_container = None
+
 
 def get_cosmos_container():
     global cosmos_client, cosmos_container
@@ -22,6 +24,7 @@ def get_cosmos_container():
         db_client = cosmos_client.get_database_client(COSMOS_DATABASE)
         cosmos_container = db_client.get_container_client(COSMOS_CONTAINER)
     return cosmos_container
+
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("Função HTTP recebida.")
@@ -36,6 +39,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             status_code=405,
             mimetype="application/json"
         )
+
 
 def handle_get(req: func.HttpRequest) -> func.HttpResponse:
     ids = []
@@ -81,6 +85,7 @@ def handle_get(req: func.HttpRequest) -> func.HttpResponse:
             logging.warning(f"ID inválido: {item_id}, ignorado.")
             continue
         subreddit_pk, _ = item_id.split("_", 1)
+        subreddit_pk = subreddit_pk.strip()
         partitioned.setdefault(subreddit_pk, []).append(item_id)
 
     results = []
@@ -103,7 +108,7 @@ def handle_get(req: func.HttpRequest) -> func.HttpResponse:
                 }
                 results.append(sanitized)
         except Exception as e:
-            logging.error(f"Erro na query para subreddit {subreddit}: {e}", exc_info=True)
+            logging.error(f"Erro na query para subreddit '{subreddit}': {e}", exc_info=True)
             continue
 
     return func.HttpResponse(
@@ -111,6 +116,7 @@ def handle_get(req: func.HttpRequest) -> func.HttpResponse:
         status_code=200,
         mimetype="application/json"
     )
+
 
 def handle_post(req: func.HttpRequest) -> func.HttpResponse:
     try:
@@ -165,14 +171,22 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
                 continue
 
             subreddit_pk, _ = item_id.split("_", 1)
-
-            # 🔑 Logging explícito para debug:
-            logging.info(f"📌 Tentar ler: ID={item_id} | PK={subreddit_pk}")
-
-            # 🔑 Normalizar PK (tira espaços)
             subreddit_pk = subreddit_pk.strip()
 
-            # Leitura e update:
+            # Verifica PK real do item para garantir 100%
+            logging.info(f"🔍 Confirma PK real para ID={item_id}...")
+            pk_query = list(container.query_items(
+                query="SELECT VALUE c.subreddit FROM c WHERE c.id = @id",
+                parameters=[{"name": "@id", "value": item_id}],
+                enable_cross_partition_query=True
+            ))
+            if pk_query:
+                subreddit_pk = pk_query[0].strip()
+            else:
+                failed.append({"id": item_id, "error": "Item não encontrado para confirmar PK."})
+                continue
+
+            logging.info(f"📌 Tentar read_item: ID={item_id} | PK='{subreddit_pk}'")
             item = container.read_item(item=item_id, partition_key=subreddit_pk)
             item["confiabilidade"] = confiabilidade
             item["sentimento"] = sentimento
