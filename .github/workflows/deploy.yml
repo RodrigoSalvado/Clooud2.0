@@ -132,7 +132,7 @@ jobs:
               --parameters \
                 planName='ASP-MiniProjetoCloud2.0' \
                 skuTier='Basic' \
-                skuName='B2' \
+                skuName='B1' \
                 capacity=1 \
                 isLinux=true \
                 location="$TARGET_LOCATION" \
