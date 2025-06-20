@@ -1,17 +1,22 @@
 import os
-import requests
-import pandas as pd
+import logging
+import re
+from datetime import datetime
+
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
-# Usaremos pipeline de sentiment-analysis para melhorar performance
-from transformers import pipeline
 from wordcloud import WordCloud, STOPWORDS
+from transformers import pipeline
+
+import requests
 from flask import Flask, render_template, request, flash, redirect, url_for, session
-import re
+from azure.cosmos import CosmosClient
 from azure.storage.blob import BlobClient, ContainerClient, ContentSettings
-from datetime import datetime
-import logging
+
+from markupsafe import Markup
+
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +37,11 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 FUNCTION_URL = os.getenv("FUNCTION_URL")        # e.g. https://<sua-func>.azurewebsites.net/api/search?code=...
 GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")  # e.g. https://<sua-func>.azurewebsites.net/api/getposts?code=...
 CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")  # e.g. https://<storage>.blob.core.windows.net/<container>?<sas>
+
+COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
+COSMOS_KEY = os.getenv("COSMOS_KEY")
+COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "RedditApp")
+COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER", "posts")
 
 from markupsafe import Markup
 
@@ -204,7 +214,6 @@ def detail_all():
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
-        session["post_ids"] = post_ids
     else:
         post_ids = session.get("post_ids", [])
 
@@ -216,6 +225,7 @@ def detail_all():
         flash("Pipeline de sentimento não está disponível.", "danger")
         return redirect(url_for("home"))
 
+    # 1️⃣ Busca posts do Cosmos
     try:
         posts = get_posts_from_cosmos(post_ids)
     except Exception as e:
@@ -236,7 +246,6 @@ def detail_all():
         return redirect(url_for("home"))
 
     analysed_posts = []
-    updates_payload = []
     text_accum = []
     neg_probs, neu_probs, pos_probs = [], [], []
 
@@ -274,14 +283,7 @@ def detail_all():
             post['sentimento'] = label_cap
             post['probabilidade'] = prob
 
-            # Prepara update para a Function
-            full_id = post.get('id') or post.get('full_id')
-            updates_payload.append({
-                "id": full_id,
-                "confiabilidade": round(score, 4),
-                "sentimento": label_cap
-            })
-
+            # Para plot e wordcloud
             label_lower = label.lower()
             if label_lower == 'negative':
                 neg_probs.append(prob)
@@ -293,21 +295,30 @@ def detail_all():
 
             analysed_posts.append(post)
 
-    # === Envia updates para a Azure Function (PUT) ===
-    if updates_payload and GET_POSTS_FUNCTION_URL:
-        try:
-            resp = requests.put(
-                GET_POSTS_FUNCTION_URL,
-                json={"updates": updates_payload},
-                timeout=30
-            )
-            resp.raise_for_status()
-            logger.info(f"PUT para Function concluído: {resp.json()}")
-        except Exception as e:
-            logger.error(f"Falhou PUT para Function: {e}", exc_info=True)
-            flash(f"Falhou guardar sentimento/confiabilidade no Cosmos DB: {e}", "danger")
+    # 2️⃣ UPDATE DIRECTO NO COSMOS
+    try:
+        cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+        db_client = cosmos_client.get_database_client(COSMOS_DATABASE)
+        cont_client = db_client.get_container_client(COSMOS_CONTAINER)
 
-    # === Geração de gráfico de densidade (KDE) ===
+        for post in analysed_posts:
+            full_id = post.get('id') or post.get('full_id')
+            if not full_id or "_" not in full_id:
+                continue
+            subreddit_pk = full_id.split("_", 1)[0].strip()
+
+            item = cont_client.read_item(item=full_id, partition_key=subreddit_pk)
+            item["confiabilidade"] = round(post['probabilidade'] / 100, 4)
+            item["sentimento"] = post['sentimento']
+
+            cont_client.replace_item(item=full_id, body=item)
+            logger.info(f"✅ Actualizado no Cosmos: {full_id}")
+
+    except Exception as e:
+        logger.error("Erro ao actualizar directamente no Cosmos: %s", e, exc_info=True)
+        flash(f"Erro ao actualizar no Cosmos: {e}", "danger")
+
+    # 3️⃣ GRÁFICO DE KDE
     resumo_chart = None
     try:
         total_values = neg_probs + neu_probs + pos_probs
@@ -340,9 +351,9 @@ def detail_all():
                 plt.savefig(resumo_chart, dpi=200)
             plt.close()
     except Exception as e:
-        logger.error("Erro ao gerar gráfico de densidade: %s", e, exc_info=True)
+        logger.error("Erro ao gerar gráfico de KDE: %s", e, exc_info=True)
 
-    # === Geração de WordCloud ===
+    # 4️⃣ WORDCLOUD
     wc_chart = None
     try:
         full_text = " ".join(text_accum)
@@ -356,9 +367,9 @@ def detail_all():
         plt.savefig(wc_chart, dpi=200)
         plt.close()
     except Exception as e:
-        logger.error("Erro ao gerar wordcloud: %s", e, exc_info=True)
+        logger.error("Erro ao gerar WordCloud: %s", e, exc_info=True)
 
-    logger.info("[DETAIL_ALL] Análise concluída, dados actualizados no Cosmos DB e gráficos gerados.")
+    logger.info("[DETAIL_ALL] Análise concluída, updates guardados e gráficos criados.")
     return render_template(
         "detail_all.html",
         posts=analysed_posts,
