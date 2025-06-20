@@ -219,30 +219,20 @@ jobs:
               --only-show-errors
             echo "Function App deployment via Bicep concluído."
 
-      # ✅ Debug: lista conteúdo antes do zip
-      - name: Debug - Listar conteúdo redditIngestFunc antes do zip
-        run: |
-          echo "PWD: $(pwd)"
-          echo "Conteúdo raiz do repositório:"
-          ls -R .
-          echo "Conteúdo de ${AZURE_FUNCTIONAPP_PACKAGE_PATH}:"
-          ls -R "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-      # ✅ Instalar Azure Functions Core Tools e publicar Function App
-      - name: Publicar Function App com func
+      - name: Instalar Azure Functions Core Tools
         run: |
-          # Instala a versão certa das Core Tools
           npm install -g azure-functions-core-tools@4 --unsafe-perm true
-
-          # Vai para a pasta da função
-          cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-
-          # Mostra versão instalada (debug)
           func --version
 
-          # Faz publish com build LOCAL para evitar timeouts no Kudu/SCM
+      - name: Publicar Function App
+        run: |
+          cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
           func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build local
-
 
 
       - name: Aguardar indexação e obter master key da Function App
