@@ -130,7 +130,9 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
 
     if not isinstance(data, dict) or "updates" not in data or not isinstance(data["updates"], list):
         return func.HttpResponse(
-            json.dumps({"error": "Formato esperado: {\"updates\": [{\"id\": \"subreddit_xxx\", \"confiabilidade\": valor, \"sentimento\": valor}, ...]}"}),
+            json.dumps({
+                "error": "Formato esperado: {\"updates\": [{\"id\": \"subreddit_xxx\", \"confiabilidade\": valor, \"sentimento\": valor}, ...]}"
+            }),
             status_code=400,
             mimetype="application/json"
         )
@@ -166,26 +168,28 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
                 failed.append({"id": item_id, "error": "Faltam campos obrigatórios."})
                 continue
 
-            # ⚡️ Confirmar PK real por query
+            # ✅ Obter PK real via query, tal como no detail_all
             pk_query = list(container.query_items(
                 query="SELECT VALUE c.subreddit FROM c WHERE c.id = @id",
                 parameters=[{"name": "@id", "value": item_id}],
                 enable_cross_partition_query=True
             ))
+
             if not pk_query:
                 failed.append({"id": item_id, "error": "Item não encontrado no Cosmos DB."})
                 continue
 
             real_pk = pk_query[0].strip()
-            logging.info(f"📌 Confirmei PK real: ID={item_id} | PK='{real_pk}'")
+            logging.info(f"📌 PK confirmado: ID={item_id} | PK='{real_pk}'")
 
-            # Agora fazer leitura e actualização com PK correcto
+            # ✅ Read + update
             item = container.read_item(item=item_id, partition_key=real_pk)
-            item["confiabilidade"] = confiabilidade
+            item["confiabilidade"] = round(float(confiabilidade), 4)
             item["sentimento"] = sentimento
 
             container.replace_item(item=item_id, body=item)
-            logging.info(f"✅ Actualizado com sucesso: {item_id}")
+            logging.info(f"✅ Actualizado: {item_id}")
+
             success.append(item_id)
 
         except Exception as e:
