@@ -232,8 +232,7 @@ jobs:
       - name: Publicar Function App
         run: |
           cd "${AZURE_FUNCTIONAPP_PACKAGE_PATH}"
-          func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build local
-
+          func azure functionapp publish "$FUNCTIONAPP_NAME" --python --build remote
 
       - name: Aguardar indexação e obter master key da Function App
         id: get_function_key
