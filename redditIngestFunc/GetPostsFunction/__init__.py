@@ -130,7 +130,7 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
 
     if not isinstance(data, dict) or "updates" not in data or not isinstance(data["updates"], list):
         return func.HttpResponse(
-            json.dumps({"error": "Formato esperado: {\"updates\": [{\"id\": \"subreddit_xxx\", \"confiabilidade\": valor, \"sentimento\": valor}]}"}),
+            json.dumps({"error": "Formato esperado: {\"updates\": [{\"id\": \"subreddit_xxx\", \"confiabilidade\": valor, \"sentimento\": valor}, ...]}"}),
             status_code=400,
             mimetype="application/json"
         )
@@ -166,25 +166,26 @@ def handle_post(req: func.HttpRequest) -> func.HttpResponse:
                 failed.append({"id": item_id, "error": "Faltam campos obrigatórios."})
                 continue
 
-            # 👇 Consulta o PK real do item
+            # ⚡️ Confirmar PK real por query
             pk_query = list(container.query_items(
                 query="SELECT VALUE c.subreddit FROM c WHERE c.id = @id",
                 parameters=[{"name": "@id", "value": item_id}],
                 enable_cross_partition_query=True
             ))
-            if pk_query:
-                subreddit_pk = pk_query[0].strip()
-                logging.info(f"PK real para {item_id} = '{subreddit_pk}'")
-            else:
-                failed.append({"id": item_id, "error": "Item não encontrado para confirmar PK."})
+            if not pk_query:
+                failed.append({"id": item_id, "error": "Item não encontrado no Cosmos DB."})
                 continue
 
-            # 👇 Lê com o PK real
-            item = container.read_item(item=item_id, partition_key=subreddit_pk)
+            real_pk = pk_query[0].strip()
+            logging.info(f"📌 Confirmei PK real: ID={item_id} | PK='{real_pk}'")
+
+            # Agora fazer leitura e actualização com PK correcto
+            item = container.read_item(item=item_id, partition_key=real_pk)
             item["confiabilidade"] = confiabilidade
             item["sentimento"] = sentimento
 
             container.replace_item(item=item_id, body=item)
+            logging.info(f"✅ Actualizado com sucesso: {item_id}")
             success.append(item_id)
 
         except Exception as e:
