@@ -12,13 +12,22 @@ from transformers import pipeline
 
 import requests
 from flask import Flask, render_template, request, flash, redirect, url_for, session
-from azure.cosmos import CosmosClient
 from azure.storage.blob import BlobClient, ContainerClient, ContentSettings
 
-from markupsafe import Markup
+from azure.cosmos import CosmosClient
 
+# Liga ao Cosmos uma vez ao iniciar a app
+COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
+COSMOS_KEY = os.getenv("COSMOS_KEY")
+COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "RedditApp")
+COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER", "posts")
 
-# Configuração de logging
+assert COSMOS_ENDPOINT and COSMOS_KEY, "Falta o Cosmos Endpoint ou Key"
+
+cosmos_client = CosmosClient(COSMOS_ENDPOINT, credential=COSMOS_KEY)
+db_client = cosmos_client.get_database_client(COSMOS_DATABASE)
+cont_client = db_client.get_container_client(COSMOS_CONTAINER)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -37,17 +46,6 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 FUNCTION_URL = os.getenv("FUNCTION_URL")        # e.g. https://<sua-func>.azurewebsites.net/api/search?code=...
 GET_POSTS_FUNCTION_URL = os.getenv("GET_POSTS_FUNCTION_URL")  # e.g. https://<sua-func>.azurewebsites.net/api/getposts?code=...
 CONTAINER_ENDPOINT_SAS = os.getenv("CONTAINER_ENDPOINT_SAS")  # e.g. https://<storage>.blob.core.windows.net/<container>?<sas>
-
-COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
-COSMOS_KEY = os.getenv("COSMOS_KEY")
-COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "RedditApp")
-COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER", "posts")
-
-from markupsafe import Markup
-
-def funcion_safe_html(html_str):
-    return Markup(html_str)
-
 
 # Inicializar pipeline de análise de sentimento (sentiment-analysis padrão, leve)
 try:
@@ -214,6 +212,7 @@ def detail_all():
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
+        session["post_ids"] = post_ids
     else:
         post_ids = session.get("post_ids", [])
 
@@ -225,21 +224,16 @@ def detail_all():
         flash("Pipeline de sentimento não está disponível.", "danger")
         return redirect(url_for("home"))
 
-    # 1️⃣ Busca posts do Cosmos
+    # 1️⃣ Buscar posts do Cosmos
     try:
         posts = get_posts_from_cosmos(post_ids)
     except Exception as e:
         logger.error(f"Erro ao buscar posts do Cosmos em detail_all: {e}", exc_info=True)
-        flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
         posts = []
 
     if not posts:
         raw_posts = session.get("posts_raw", [])
-        filtered = []
-        for p in raw_posts:
-            if p.get('full_id') in post_ids:
-                filtered.append(p.copy())
-        posts = filtered
+        posts = [p.copy() for p in raw_posts if p.get('full_id') in post_ids]
 
     if not posts:
         flash("Não há posts para análise.", "warning")
@@ -254,8 +248,7 @@ def detail_all():
     for idx, post in enumerate(posts):
         snippet = post.get('selftext', '').strip() or post.get('title', '').strip()
         if snippet:
-            if len(snippet) > 512:
-                snippet = snippet[:512]
+            snippet = snippet[:512]
             texts.append(snippet)
             posts_index.append(idx)
         else:
@@ -273,103 +266,84 @@ def detail_all():
             results = [{} for _ in batch_texts]
 
         for j, res in enumerate(results):
-            post_idx = posts_index[start + j]
-            post = posts[post_idx]
+            idx = posts_index[start + j]
+            post = posts[idx]
             label = res.get('label', 'Unknown')
             score = res.get('score', 0.0)
-            label_cap = label.capitalize() if isinstance(label, str) else 'Unknown'
             prob = int(score * 100)
+            label_cap = label.capitalize() if isinstance(label, str) else 'Unknown'
 
             post['sentimento'] = label_cap
             post['probabilidade'] = prob
 
-            # Para plot e wordcloud
-            label_lower = label.lower()
-            if label_lower == 'negative':
+            if label.lower() == 'negative':
                 neg_probs.append(prob)
-            elif label_lower == 'positive':
+            elif label.lower() == 'positive':
                 pos_probs.append(prob)
             else:
                 neu_probs.append(prob)
-            text_accum.append(batch_texts[j])
 
+            text_accum.append(batch_texts[j])
             analysed_posts.append(post)
 
-    # 2️⃣ UPDATE DIRECTO NO COSMOS
+    # 2️⃣ UPDATE directo no Cosmos
     try:
-        cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
-        db_client = cosmos_client.get_database_client(COSMOS_DATABASE)
-        cont_client = db_client.get_container_client(COSMOS_CONTAINER)
-
         for post in analysed_posts:
             full_id = post.get('id') or post.get('full_id')
             if not full_id or "_" not in full_id:
                 continue
-            subreddit_pk = full_id.split("_", 1)[0].strip()
+            pk = full_id.split("_", 1)[0].strip()
 
-            item = cont_client.read_item(item=full_id, partition_key=subreddit_pk)
-            item["confiabilidade"] = round(post['probabilidade'] / 100, 4)
+            item = cont_client.read_item(item=full_id, partition_key=pk)
             item["sentimento"] = post['sentimento']
+            item["confiabilidade"] = round(post['probabilidade'] / 100, 4)
 
             cont_client.replace_item(item=full_id, body=item)
-            logger.info(f"✅ Actualizado no Cosmos: {full_id}")
-
+            logger.info(f"✅ Actualizado: {full_id}")
     except Exception as e:
-        logger.error("Erro ao actualizar directamente no Cosmos: %s", e, exc_info=True)
+        logger.error("Erro ao actualizar no Cosmos: %s", e, exc_info=True)
         flash(f"Erro ao actualizar no Cosmos: {e}", "danger")
 
-    # 3️⃣ GRÁFICO DE KDE
-    resumo_chart = None
+    # 3️⃣ Gráfico de KDE
+    import os
+    os.makedirs("static", exist_ok=True)
+    resumo_chart = "static/distribuicao_confianca.png"
     try:
-        total_values = neg_probs + neu_probs + pos_probs
-        if len(total_values) >= 2:
+        total = neg_probs + neu_probs + pos_probs
+        if len(total) >= 2:
             x = np.linspace(0, 100, 500)
             plt.figure(figsize=(8, 4))
-            plotted = False
             if len(neg_probs) > 1:
-                kde_neg = gaussian_kde(neg_probs)
-                y_neg = kde_neg(x)
-                plt.plot(x, y_neg, label="Negative")
-                plotted = True
+                plt.plot(x, gaussian_kde(neg_probs)(x), label="Negative")
             if len(neu_probs) > 1:
-                kde_neu = gaussian_kde(neu_probs)
-                y_neu = kde_neu(x)
-                plt.plot(x, y_neu, label="Neutral")
-                plotted = True
+                plt.plot(x, gaussian_kde(neu_probs)(x), label="Neutral")
             if len(pos_probs) > 1:
-                kde_pos = gaussian_kde(pos_probs)
-                y_pos = kde_pos(x)
-                plt.plot(x, y_pos, label="Positive")
-                plotted = True
-            if plotted:
-                plt.xlabel("Confiança (%)")
-                plt.ylabel("Densidade")
-                plt.title("Distribuição de Confiança por Sentimento")
-                plt.legend()
-                plt.tight_layout()
-                resumo_chart = "static/distribuicao_confianca.png"
-                plt.savefig(resumo_chart, dpi=200)
+                plt.plot(x, gaussian_kde(pos_probs)(x), label="Positive")
+            plt.xlabel("Confiança (%)")
+            plt.ylabel("Densidade")
+            plt.title("Distribuição de Confiança")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(resumo_chart, dpi=200)
             plt.close()
     except Exception as e:
-        logger.error("Erro ao gerar gráfico de KDE: %s", e, exc_info=True)
+        logger.error("Erro ao gerar gráfico KDE: %s", e, exc_info=True)
 
-    # 4️⃣ WORDCLOUD
-    wc_chart = None
+    # 4️⃣ WordCloud
+    wc_chart = "static/nuvem_palavras_all.png"
     try:
-        full_text = " ".join(text_accum)
         wordcloud = WordCloud(width=700, height=350, background_color="white",
-                              stopwords=set(STOPWORDS)).generate(full_text)
+                              stopwords=set(STOPWORDS)).generate(" ".join(text_accum))
         plt.figure(figsize=(7, 3.5))
         plt.imshow(wordcloud, interpolation="bilinear")
         plt.axis("off")
         plt.tight_layout()
-        wc_chart = "static/nuvem_palavras_all.png"
         plt.savefig(wc_chart, dpi=200)
         plt.close()
     except Exception as e:
         logger.error("Erro ao gerar WordCloud: %s", e, exc_info=True)
 
-    logger.info("[DETAIL_ALL] Análise concluída, updates guardados e gráficos criados.")
+    logger.info("[DETAIL_ALL] Tudo concluído.")
     return render_template(
         "detail_all.html",
         posts=analysed_posts,
