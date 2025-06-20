@@ -209,6 +209,17 @@ def search():
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
+    # --- 0️⃣ Ambiente Cosmos
+    COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
+    COSMOS_KEY = os.getenv("COSMOS_KEY")
+    COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "RedditApp")
+    COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER", "posts")
+
+    cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+    db_client = cosmos_client.get_database_client(COSMOS_DATABASE)
+    cont_client = db_client.get_container_client(COSMOS_CONTAINER)
+
+    # --- 1️⃣ IDs
     ids_form = request.form.getlist('ids[]') or request.form.getlist('ids')
     if ids_form:
         post_ids = ids_form
@@ -224,7 +235,7 @@ def detail_all():
         flash("Pipeline de sentimento não está disponível.", "danger")
         return redirect(url_for("home"))
 
-    # 1️⃣ Buscar posts do Cosmos
+    # --- 2️⃣ Buscar posts do Cosmos
     try:
         posts = get_posts_from_cosmos(post_ids)
     except Exception as e:
@@ -286,7 +297,7 @@ def detail_all():
             text_accum.append(batch_texts[j])
             analysed_posts.append(post)
 
-    # 2️⃣ UPDATE directo no Cosmos
+    # --- 3️⃣ Update seguro no Cosmos
     try:
         for post in analysed_posts:
             full_id = post.get('id') or post.get('full_id')
@@ -294,18 +305,26 @@ def detail_all():
                 continue
             pk = full_id.split("_", 1)[0].strip()
 
-            item = cont_client.read_item(item=full_id, partition_key=pk)
+            # Verificar existência primeiro
+            query = f"SELECT * FROM c WHERE c.id = '{full_id}'"
+            items = list(cont_client.query_items(query=query, enable_cross_partition_query=True))
+
+            if not items:
+                logger.warning(f"❌ Item não encontrado no Cosmos: {full_id}")
+                continue
+
+            item = items[0]
             item["sentimento"] = post['sentimento']
             item["confiabilidade"] = round(post['probabilidade'] / 100, 4)
 
-            cont_client.replace_item(item=full_id, body=item)
+            cont_client.replace_item(item=item['id'], body=item)
             logger.info(f"✅ Actualizado: {full_id}")
+
     except Exception as e:
         logger.error("Erro ao actualizar no Cosmos: %s", e, exc_info=True)
         flash(f"Erro ao actualizar no Cosmos: {e}", "danger")
 
-    # 3️⃣ Gráfico de KDE
-    import os
+    # --- 4️⃣ Gráfico de KDE
     os.makedirs("static", exist_ok=True)
     resumo_chart = "static/distribuicao_confianca.png"
     try:
@@ -329,7 +348,7 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar gráfico KDE: %s", e, exc_info=True)
 
-    # 4️⃣ WordCloud
+    # --- 5️⃣ WordCloud
     wc_chart = "static/nuvem_palavras_all.png"
     try:
         wordcloud = WordCloud(width=700, height=350, background_color="white",
@@ -350,6 +369,7 @@ def detail_all():
         resumo_chart=resumo_chart,
         wc_chart=wc_chart
     )
+
 
 
 @app.route("/gerar_relatorio", methods=["POST"])
