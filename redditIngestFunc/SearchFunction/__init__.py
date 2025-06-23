@@ -41,11 +41,40 @@ TRANSLATOR_KEY = os.environ.get("TRANSLATOR_KEY")
 TRANSLATOR_ENDPOINT = os.environ.get("TRANSLATOR_ENDPOINT")
 TRANSLATOR_REGION = os.environ.get("TRANSLATOR_REGION", "francecentral")
 
-# --- Funções de Tradução (comentadas) ---
-# def detect_language(text: str) -> str:
-#     ...
-# def translate_to_english(text: str, from_lang: str = None) -> str:
-#     ...
+# --- Funções de Tradução ---Add commentMore actions
+def detect_language(text: str) -> str:
+    """Detecta o idioma de um texto usando Azure Translator."""
+    path = '/detect'
+    url = TRANSLATOR_ENDPOINT + path
+    params = {'api-version': '3.0'}
+    headers = {
+        'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
+        'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
+        'Content-Type': 'application/json'
+    }
+    body = [{'text': text}]
+    resp = requests.post(url, params=params, headers=headers, json=body)
+    resp.raise_for_status()
+    return resp.json()[0]['language']
+
+
+def translate_to_english(text: str, from_lang: str = None) -> str:
+    """Traduz texto para inglês usando Azure Translator."""
+    path = '/translate'
+    url = TRANSLATOR_ENDPOINT + path
+    params = {'api-version': '3.0', 'to': ['en']}
+    if from_lang:
+        params['from'] = from_lang
+    headers = {
+        'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
+        'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
+        'Content-Type': 'application/json'
+    }
+    body = [{'text': text}]
+    resp = requests.post(url, params=params, headers=headers, json=body)
+    resp.raise_for_status()
+    result = resp.json()
+    return result[0]['translations'][0]['text']
 
 # --- Configurações e credenciais ---
 CLIENT_ID = os.environ.get("CLIENT_ID") or os.environ.get("REDDIT_CLIENT_ID")
@@ -166,15 +195,26 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
         rid = d.get("id")
         if not rid:
             continue
-        title = d.get("title", "")
-        # Tradutor desativado
+
+        title = d.get("title", "") or ""
+        selftext = d.get("selftext", "") or ""
+
+        if selftext.strip():
+            detected_lang = detect_language(selftext)
+            text_to_analyse = translate_to_english(selftext, from_lang=detected_lang)
+        else:
+            detected_lang = detect_language(title)
+            text_to_analyse = translate_to_english(title, from_lang=detected_lang)
+
         item = {
-            "id":        f"{subreddit}_{rid}",
+            "id": f"{subreddit}_{rid}",
             "subreddit": subreddit,
-            "title":     title,
-            "selftext":  d.get("selftext", ""),
-            "url":       d.get("url", "")
+            "title": title,
+            "selftext": selftext,
+            "text_to_analyse": text_to_analyse,
+            "url": d.get("url", "")
         }
+
         cont.upsert_item(item)
         logger.info(f"Upserted item: {item['id']}")
         posts.append(item)

@@ -37,6 +37,8 @@ param functionGetPostsUrl string = ''
 @description('URL completa da Function (com chave) para app setting REPORT_FUNCTION_URL. Se vazio, não adiciona.')
 param functionGenerateReport string = ''
 
+@description('Nome da Cosmos DB Account existente')
+param cosmosAccountName string
 
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
@@ -46,6 +48,16 @@ var addContainerEndpoint = containerEndpointSas != ''
 resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
+
+// Cosmos existente — IGUAL ao function-app
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' existing = {
+  name: cosmosAccountName
+}
+
+// Obter endpoint e chave
+var cosmosEndpoint = cosmosAccount.properties.documentEndpoint
+var cosmosKeys = listKeys(cosmosAccount.id, '2021-04-15')
+var cosmosKey = cosmosKeys.primaryMasterKey
 
 // 1) Configurações básicas sempre incluídas
 var baseAppSettings array = [
@@ -60,6 +72,14 @@ var baseAppSettings array = [
   {
     name: 'CONTAINER_NAME'
     value: containerName
+  }
+  {
+    name: 'COSMOS_ENDPOINT'
+    value: cosmosEndpoint
+  }
+  {
+    name: 'COSMOS_KEY'
+    value: cosmosKey
   }
 ]
 

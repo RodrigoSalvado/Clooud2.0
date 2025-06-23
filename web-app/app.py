@@ -257,15 +257,25 @@ def detail_all():
     texts = []
     posts_index = []
     for idx, post in enumerate(posts):
-        snippet = post.get('selftext', '').strip() or post.get('title', '').strip()
+        # Nova regra:
+        # 1) Usa text_to_analyse se existir
+        # 2) Senão tenta selftext
+        # 3) Senão tenta title
+        snippet = (
+            post.get('text_to_analyse', '').strip()
+            or post.get('selftext', '').strip()
+            or post.get('title', '').strip()
+        )
+
         if snippet:
-            snippet = snippet[:512]
+            snippet = snippet[:512]  # Limita para evitar overflow
             texts.append(snippet)
             posts_index.append(idx)
         else:
             post['sentimento'] = 'Unknown'
             post['probabilidade'] = 0
             analysed_posts.append(post)
+
 
     batch_size = 16
     for start in range(0, len(texts), batch_size):
@@ -325,28 +335,37 @@ def detail_all():
         flash(f"Erro ao actualizar no Cosmos: {e}", "danger")
 
     # --- 4️⃣ Gráfico de KDE
+    import seaborn as sns  # se ainda não tiveres, instala: pip install seaborn
+
     os.makedirs("static", exist_ok=True)
     resumo_chart = "static/distribuicao_confianca.png"
+
     try:
         total = neg_probs + neu_probs + pos_probs
         if len(total) >= 2:
-            x = np.linspace(0, 100, 500)
-            plt.figure(figsize=(8, 4))
+            plt.figure(figsize=(10, 5))
+
+            # Histograma + KDE para cada classe
             if len(neg_probs) > 1:
-                plt.plot(x, gaussian_kde(neg_probs)(x), label="Negative")
+                sns.histplot(neg_probs, bins=10, kde=True, stat="count",
+                            color="red", label="Negative", element="step", fill=False)
             if len(neu_probs) > 1:
-                plt.plot(x, gaussian_kde(neu_probs)(x), label="Neutral")
+                sns.histplot(neu_probs, bins=10, kde=True, stat="count",
+                            color="grey", label="Neutral", element="step", fill=False)
             if len(pos_probs) > 1:
-                plt.plot(x, gaussian_kde(pos_probs)(x), label="Positive")
+                sns.histplot(pos_probs, bins=10, kde=True, stat="count",
+                            color="green", label="Positive", element="step", fill=False)
+
             plt.xlabel("Confiança (%)")
-            plt.ylabel("Densidade")
-            plt.title("Distribuição de Confiança")
+            plt.ylabel("Número de Posts (Histograma) + Curva KDE")
+            plt.title("Distribuição de Confiança (Histograma + KDE)")
             plt.legend()
             plt.tight_layout()
             plt.savefig(resumo_chart, dpi=200)
             plt.close()
     except Exception as e:
-        logger.error("Erro ao gerar gráfico KDE: %s", e, exc_info=True)
+        logger.error("Erro ao gerar gráfico combinado KDE+Histograma: %s", e, exc_info=True)
+
 
     # --- 5️⃣ WordCloud
     wc_chart = "static/nuvem_palavras_all.png"

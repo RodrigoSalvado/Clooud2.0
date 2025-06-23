@@ -194,7 +194,25 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Function App via Bicep (template) com credenciais hardcoded
+      - name: Deploy Translator via Bicep
+        id: deploy_translator
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "A criar Translator..."
+            OUTPUT=$(az deployment group create \
+              --resource-group "$RG" \
+              --template-file templates/translator.bicep \
+              --parameters translatorName="translator" \
+              --query "properties.outputs" -o json)
+
+            TRANSLATOR_ENDPOINT=$(echo $OUTPUT | jq -r '.translatorEndpoint.value')
+            TRANSLATOR_KEY=$(echo $OUTPUT | jq -r '.translatorKey.value')
+
+            echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
+            echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
+
+      - name: Deploy Function App via Bicep 
         uses: azure/cli@v1
         with:
           inlineScript: |
@@ -214,10 +232,11 @@ jobs:
                 redditPassword="${REDDIT_PASSWORD}" \
                 clientIdValue="${CLIENT_ID}" \
                 secretValue="${CLIENT_SECRET}" \
-                translatorEndpoint="" \
-                translatorKey="" \
+                translatorEndpoint="${{ steps.deploy_translator.outputs.TRANSLATOR_ENDPOINT }}" \
+                translatorKey="${{ steps.deploy_translator.outputs.TRANSLATOR_KEY }}" \
               --only-show-errors
             echo "Function App deployment via Bicep concluído."
+
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v4
@@ -308,6 +327,7 @@ jobs:
                 functionUrl="$FUNCTION_URL_FULL" \
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
                 containerEndpointSas="$SAS_FULL" \
+                cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
               --only-show-errors
             echo "Web App deployment concluído."
 
