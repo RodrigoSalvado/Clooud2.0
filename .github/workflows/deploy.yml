@@ -204,13 +204,14 @@ jobs:
               --resource-group "$RG" \
               --template-file templates/translator.bicep \
               --parameters translatorName="translator" \
-              --query "properties.outputs" -o json)
+              -o json)
 
-            TRANSLATOR_ENDPOINT=$(echo $OUTPUT | jq -r '.translatorEndpoint.value')
-            TRANSLATOR_KEY=$(echo $OUTPUT | jq -r '.translatorKey.value')
+            TRANSLATOR_ENDPOINT=$(echo $OUTPUT | jq -r '.properties.outputs.translatorEndpoint.value')
+            TRANSLATOR_KEY=$(echo $OUTPUT | jq -r '.properties.outputs.translatorKey.value')
 
             echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
             echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
+
 
       - name: Deploy Function App via Bicep 
         uses: azure/cli@v1
