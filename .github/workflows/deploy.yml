@@ -194,23 +194,32 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Translator via Bicep
+      - name: Deploy Translator via Bicep (robusto)
         id: deploy_translator
         uses: azure/cli@v1
         with:
           inlineScript: |
             echo "A criar Translator..."
-            OUTPUT=$(az deployment group create \
+
+            # Executa e guarda a resposta JSON num ficheiro
+            az deployment group create \
               --resource-group "$RG" \
               --template-file templates/translator.bicep \
               --parameters translatorName="translator" \
-              -o json)
+              -o json > translator_output.json
 
-            TRANSLATOR_ENDPOINT=$(echo $OUTPUT | jq -r '.properties.outputs.translatorEndpoint.value')
-            TRANSLATOR_KEY=$(echo $OUTPUT | jq -r '.properties.outputs.translatorKey.value')
+            # Extrai valores com jq a partir do ficheiro
+            TRANSLATOR_ENDPOINT=$(jq -r '.properties.outputs.translatorEndpoint.value' translator_output.json)
+            TRANSLATOR_KEY=$(jq -r '.properties.outputs.translatorKey.value' translator_output.json)
 
             echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
             echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
+
+            # Debug opcional
+            echo "Translator criado com sucesso:"
+            echo "Endpoint: $TRANSLATOR_ENDPOINT"
+            echo "Key: $TRANSLATOR_KEY"
+
 
 
       - name: Deploy Function App via Bicep 
