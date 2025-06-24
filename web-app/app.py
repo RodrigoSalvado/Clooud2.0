@@ -453,28 +453,12 @@ def detail_all():
 
 @app.route("/gerar_relatorio", methods=["POST"])
 def gerar_relatorio():
-    post_ids = session.get("post_ids")
-    if not post_ids:
-        flash("Não há dados disponíveis para gerar relatório.", "warning")
-        return redirect(url_for("home"))
-
     if not CONTAINER_ENDPOINT_SAS:
         logger.error("CONTAINER_ENDPOINT_SAS inválido ou ausente no gerar_relatorio.")
         flash("CONTAINER_ENDPOINT_SAS inválido ou ausente.", "danger")
         return redirect(url_for("home"))
 
-    # 1) Buscar dados completos do Cosmos
-    try:
-        posts = get_posts_from_cosmos(post_ids)
-    except Exception as e:
-        logger.error(f"Erro ao buscar posts do Cosmos em gerar_relatorio: {e}", exc_info=True)
-        flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
-        return redirect(url_for("home"))
-
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-    df = pd.DataFrame(posts)
-    local_csv_name = f"relatorio_{timestamp}.csv"
-    df.to_csv(local_csv_name, index=False, encoding="utf-8")
 
     try:
         # Separar base e token
@@ -482,15 +466,8 @@ def gerar_relatorio():
         if len(parts) != 2:
             raise ValueError("Formato inválido de CONTAINER_ENDPOINT_SAS")
         sas_url_base, sas_token = parts
-        # Upload CSV
-        blob_url = f"{sas_url_base}/{local_csv_name}?{sas_token}"
-        blob_client = BlobClient.from_blob_url(blob_url)
-        with open(local_csv_name, "rb") as data:
-            blob_client.upload_blob(data, overwrite=True, content_settings=ContentSettings(
-                content_type="text/csv",
-                content_disposition="inline"
-            ))
-        # Upload de gráficos, se existirem
+
+        # Upload apenas dos gráficos
         candidatos = [
             ("static/distribuicao_confianca.png", f"distribuicao_confianca_{timestamp}.png"),
             ("static/nuvem_palavras_all.png", f"nuvem_palavras_all_{timestamp}.png")
@@ -504,13 +481,12 @@ def gerar_relatorio():
                         content_type="image/png",
                         content_disposition="inline"
                     ))
-        flash("Relatório e gráficos enviados com sucesso.", "success")
+        flash("Gráficos enviados com sucesso para o Blob Storage.", "success")
     except Exception as e:
-        logger.error("Erro ao enviar para Azure Blob Storage: %s", e, exc_info=True)
-        flash(f"Erro ao enviar para Azure Blob Storage: {e}", "danger")
+        logger.error("Erro ao enviar gráficos para Azure Blob Storage: %s", e, exc_info=True)
+        flash(f"Erro ao enviar gráficos para Azure Blob Storage: {e}", "danger")
 
     return redirect(url_for("home"))
-
 
 
 
