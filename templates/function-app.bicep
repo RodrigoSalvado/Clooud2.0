@@ -75,7 +75,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     serverFarmId: planResourceId
     httpsOnly: true
     siteConfig: {
-      linuxFxVersion: 'Python|3.11'
+      linuxFxVersion: 'Python|3.10'
       // Adicionar CORS para permitir chamadas de https://portal.azure.com, se necessário
       cors: {
         allowedOrigins: [
