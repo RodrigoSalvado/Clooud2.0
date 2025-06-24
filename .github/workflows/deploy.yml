@@ -194,23 +194,23 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Translator via Bicep (método robusto)
+      - name: Deploy Translator via Bicep
         id: deploy_translator
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "A criar Translator..."
+            echo "A criar Translator 'translator'..."
 
-            DEPLOY_NAME="deploy-translator-$(date +%s)"
+            DEPLOY_NAME="deploy-translator"
 
-            # Faz o deploy sem output
+            # Faz deploy do recurso Translator
             az deployment group create \
               --resource-group "$RG" \
               --name "$DEPLOY_NAME" \
               --template-file templates/translator.bicep \
               --parameters translatorName="translator"
 
-            # Usa 'show' para ler os outputs de forma estável
+            # Lê os outputs do mesmo deployment
             OUTPUT=$(az deployment group show \
               --resource-group "$RG" \
               --name "$DEPLOY_NAME" \
@@ -222,9 +222,10 @@ jobs:
             echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
             echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
 
-            echo "✅ Translator criado com sucesso:"
+            echo "✅ Translator 'translator' criado com sucesso:"
             echo "Endpoint: $TRANSLATOR_ENDPOINT"
             echo "Key: $TRANSLATOR_KEY"
+
 
 
 
