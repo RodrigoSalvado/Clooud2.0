@@ -99,7 +99,7 @@ jobs:
               --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
-            - name: Criar Cognitive Services para Translator
+      - name: Criar Cognitive Services para Translator
         id: create_translator
         uses: azure/cli@v1
         with:
