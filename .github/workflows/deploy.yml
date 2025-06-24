@@ -99,29 +99,29 @@ jobs:
               --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
-      - name: Criar Translator gratuito (dedicado)
+      - name: Criar Translator pago (S1)
         id: create_translator
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "🔹 A criar Translator dedicado (F0) em região suportada..."
+            echo "🔹 A criar o Translator com SKU S1 na região desejada..."
 
             az cognitiveservices account create \
               --name "translator" \
               --resource-group "$RG" \
               --kind "Translator" \
-              --sku F0 \
+              --sku S1 \
               --location "westeurope" \
               --yes
 
-            echo "✅ Translator (F0) criado em 'westeurope'."
+            echo "✅ Translator criado com sucesso (SKU S1 em westeurope)."
 
       - name: Obter endpoint e chave do Translator
         id: get_translator_info
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "🔹 A buscar endpoint e chave..."
+            echo "🔹 A buscar endpoint e chave do Translator..."
 
             TRANSLATOR_ENDPOINT=$(az cognitiveservices account show \
               --resource-group "$RG" \
@@ -138,7 +138,6 @@ jobs:
 
             echo "✅ Endpoint: $TRANSLATOR_ENDPOINT"
             echo "✅ Key: $TRANSLATOR_KEY"
-
 
       - name: Deploy CosmosDB (se não existir) via Bicep
         uses: azure/cli@v1
