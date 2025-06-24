@@ -194,7 +194,7 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Translator via Bicep (só cria)
+      - name: Deploy Translator via Bicep (sem outputs)
         id: deploy_translator
         uses: azure/cli@v1
         with:
@@ -206,26 +206,18 @@ jobs:
               --template-file templates/translator.bicep \
               --parameters translatorName="translator"
 
-            echo "✅ Translator deploy criado. Outputs serão lidos a seguir."
-      
-      - name: Obter endpoint e key do Translator (passo separado)
+      - name: Obter endpoint e key do Translator de forma limpa
         id: get_translator_info
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "🔹 A buscar outputs do deployment e a listar keys..."
+            echo "🔹 A buscar endpoint e key..."
 
-            DEPLOY_NAME="deploy-translator"
-
-            # Lê o output do deployment para apanhar o endpoint
-            OUTPUT=$(az deployment group show \
+            TRANSLATOR_ENDPOINT=$(az cognitiveservices account show \
               --resource-group "$RG" \
-              --name "$DEPLOY_NAME" \
-              -o json)
+              --name "translator" \
+              --query "properties.endpoint" -o tsv)
 
-            TRANSLATOR_ENDPOINT=$(echo $OUTPUT | jq -r '.properties.outputs.translatorEndpoint.value')
-
-            # Usa comando oficial para obter a chave segura
             TRANSLATOR_KEY=$(az cognitiveservices account keys list \
               --resource-group "$RG" \
               --name "translator" \
@@ -234,11 +226,9 @@ jobs:
             echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
             echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
 
-            echo "✅ Translator Info:"
+            echo "✅ Translator:"
             echo "Endpoint: $TRANSLATOR_ENDPOINT"
             echo "Key: $TRANSLATOR_KEY"
-
-
 
       - name: Deploy Function App via Bicep 
         uses: azure/cli@v1

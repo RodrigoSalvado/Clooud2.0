@@ -10,6 +10,3 @@ resource translator 'Microsoft.CognitiveServices/accounts@2023-05-01' = {
   }
   properties: {}
 }
-
-output translatorEndpoint string = translator.properties.endpoint
-// NÃO DEVOLVES KEYS AQUI!
