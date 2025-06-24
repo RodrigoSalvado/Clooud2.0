@@ -1,3 +1,5 @@
 azure-functions
 azure-cosmos>=4.0.0
 requests
+praw
+python-dotenv
