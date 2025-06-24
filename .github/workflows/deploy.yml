@@ -232,8 +232,11 @@ jobs:
           docker push rodrig0salv/minha-app:latest
 
 
-      - name: Deploy Function App via Bicep 
+      - name: Deploy Function App via Bicep
         uses: azure/cli@v1
+        env:
+          TRANSLATOR_ENDPOINT: ${{ steps.get_translator_info.outputs.TRANSLATOR_ENDPOINT }}
+          TRANSLATOR_KEY: ${{ steps.get_translator_info.outputs.TRANSLATOR_KEY }}
         with:
           inlineScript: |
             echo "Deploy Function App ($FUNCTIONAPP_NAME) via Bicep..."
@@ -252,11 +255,10 @@ jobs:
                 redditPassword="${REDDIT_PASSWORD}" \
                 clientIdValue="${CLIENT_ID}" \
                 secretValue="${CLIENT_SECRET}" \
-                translatorEndpoint="${{ steps.deploy_translator.outputs.TRANSLATOR_ENDPOINT }}" \
-                translatorKey="${{ steps.deploy_translator.outputs.TRANSLATOR_KEY }}" \
+                translatorEndpoint="$TRANSLATOR_ENDPOINT" \
+                translatorKey="$TRANSLATOR_KEY" \
               --only-show-errors
             echo "Function App deployment via Bicep concluído."
-
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v4
