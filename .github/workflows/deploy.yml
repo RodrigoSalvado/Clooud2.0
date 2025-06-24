@@ -194,24 +194,30 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Translator via Bicep (sem outputs)
-        id: deploy_translator
+      - name: Criar Translator directamente via az cognitiveservices
+        id: create_translator
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "🔹 A criar o Translator 'translator'..."
-            az deployment group create \
-              --resource-group "$RG" \
-              --name "deploy-translator" \
-              --template-file templates/translator.bicep \
-              --parameters translatorName="translator"
+            echo "🔹 A criar o Translator com comando directo..."
 
-      - name: Obter endpoint e key do Translator de forma limpa
+            az cognitiveservices account create \
+              --name "translator" \
+              --resource-group "$RG" \
+              --kind "Translator" \
+              --sku F0 \
+              --location "$TARGET_LOCATION" \
+              --yes
+
+            echo "✅ Translator criado (ou já existente)"
+
+
+      - name: Obter endpoint e key do Translator
         id: get_translator_info
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "🔹 A buscar endpoint e key..."
+            echo "🔹 A buscar endpoint e key do Translator..."
 
             TRANSLATOR_ENDPOINT=$(az cognitiveservices account show \
               --resource-group "$RG" \
@@ -229,6 +235,7 @@ jobs:
             echo "✅ Translator:"
             echo "Endpoint: $TRANSLATOR_ENDPOINT"
             echo "Key: $TRANSLATOR_KEY"
+
 
       - name: Deploy Function App via Bicep 
         uses: azure/cli@v1
