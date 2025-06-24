@@ -99,6 +99,47 @@ jobs:
               --only-show-errors
             echo "Storage Account deploy concluído: $DEPLOY_NAME"
 
+            - name: Criar Cognitive Services para Translator
+        id: create_translator
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "🔹 A criar Cognitive Services com API Translator..."
+
+            az cognitiveservices account create \
+              --name "translator" \
+              --resource-group "$RG" \
+              --kind "CognitiveServices" \
+              --sku F0 \
+              --location "$TARGET_LOCATION" \
+              --yes
+
+            echo "✅ Cognitive Services criado com sucesso."
+
+
+      - name: Obter endpoint e key do Translator
+        id: get_translator_info
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "🔹 A buscar endpoint e key..."
+
+            TRANSLATOR_ENDPOINT=$(az cognitiveservices account show \
+              --resource-group "$RG" \
+              --name "translator" \
+              --query "properties.endpoint" -o tsv)
+
+            TRANSLATOR_KEY=$(az cognitiveservices account keys list \
+              --resource-group "$RG" \
+              --name "translator" \
+              --query "key1" -o tsv)
+
+            echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
+            echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
+
+            echo "✅ Endpoint: $TRANSLATOR_ENDPOINT"
+            echo "✅ Key: $TRANSLATOR_KEY"
+
       - name: Deploy CosmosDB (se não existir) via Bicep
         uses: azure/cli@v1
         with:
@@ -193,48 +234,6 @@ jobs:
         run: |
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
-
-      - name: Criar Translator directamente via az cognitiveservices
-        id: create_translator
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            echo "🔹 A criar o Translator com comando directo..."
-
-            az cognitiveservices account create \
-              --name "translator" \
-              --resource-group "$RG" \
-              --kind "Translator" \
-              --sku F0 \
-              --location "$TARGET_LOCATION" \
-              --yes
-
-            echo "✅ Translator criado (ou já existente)"
-
-
-      - name: Obter endpoint e key do Translator
-        id: get_translator_info
-        uses: azure/cli@v1
-        with:
-          inlineScript: |
-            echo "🔹 A buscar endpoint e key do Translator..."
-
-            TRANSLATOR_ENDPOINT=$(az cognitiveservices account show \
-              --resource-group "$RG" \
-              --name "translator" \
-              --query "properties.endpoint" -o tsv)
-
-            TRANSLATOR_KEY=$(az cognitiveservices account keys list \
-              --resource-group "$RG" \
-              --name "translator" \
-              --query "key1" -o tsv)
-
-            echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
-            echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
-
-            echo "✅ Translator:"
-            echo "Endpoint: $TRANSLATOR_ENDPOINT"
-            echo "Key: $TRANSLATOR_KEY"
 
 
       - name: Deploy Function App via Bicep 
