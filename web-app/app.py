@@ -403,9 +403,23 @@ def detail_all():
 
         if categorias:
             plt.figure(figsize=(8, 5))
-            sns.barplot(x=categorias, y=counts, palette=["red", "grey", "green"])
-            for i, (c, p) in enumerate(zip(counts, avg_probs)):
-                plt.text(i, c + 0.1, f"Media Confiança: {p:.1f}%", ha="center")
+            bars = plt.bar(categorias, counts, color=['red', 'grey', 'green'][:len(categorias)])
+
+            # Limite superior para texto não colidir
+            plt.ylim(0, max(counts) * 1.3)
+
+            # Anota cada barra
+            for bar, avg_conf in zip(bars, avg_probs):
+                height = bar.get_height()
+                plt.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    height + 0.1,
+                    f"Média Confiança: {avg_conf:.1f}%",
+                    ha='center',
+                    va='bottom',
+                    fontsize=10
+                )
+
             plt.xlabel("Categoria de Sentimento")
             plt.ylabel("Número de Posts")
             plt.title("Número de Posts e Média de Confiança por Categoria")
@@ -414,6 +428,7 @@ def detail_all():
             plt.close()
     except Exception as e:
         logger.error("Erro ao gerar gráfico de barras resumo: %s", e, exc_info=True)
+
 
     try:
         wordcloud = WordCloud(width=700, height=350, background_color="white",
