@@ -9,14 +9,17 @@ param imageName string
 
 @description('URL do registry Docker. Se vazio, assume público Docker Hub.')
 param containerRegistryUrl string = ''
+
 @description('Username para o registry (se privado).')
 param containerRegistryUsername string = ''
+
 @secure()
 @description('Password para o registry (se privado).')
 param containerRegistryPassword string = ''
 
 @description('Nome da Storage Account para app settings.')
 param storageAccountName string
+
 @description('Nome do container na Storage Account.')
 param containerName string
 
@@ -40,27 +43,32 @@ param functionGenerateReport string = ''
 @description('Nome da Cosmos DB Account existente')
 param cosmosAccountName string
 
+@description('Endpoint do Translator (opcional).')
+param translatorEndpoint string = ''
+
+@secure()
+@description('Chave do Translator (opcional).')
+param translatorKey string = ''
+
 var usePrivateRegistry = containerRegistryUrl != ''
 var addFunctionUrl = functionUrl != ''
 var addContainerSas = containerSasToken != ''
 var addContainerEndpoint = containerEndpointSas != ''
+var addTranslator = translatorEndpoint != '' && translatorKey != ''
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2021-02-01' existing = {
   name: planName
 }
 
-// Cosmos existente — IGUAL ao function-app
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2021-04-15' existing = {
   name: cosmosAccountName
 }
 
-// Obter endpoint e chave
 var cosmosEndpoint = cosmosAccount.properties.documentEndpoint
 var cosmosKeys = listKeys(cosmosAccount.id, '2021-04-15')
 var cosmosKey = cosmosKeys.primaryMasterKey
 
-// 1) Configurações básicas sempre incluídas
-var baseAppSettings array = [
+var baseAppSettings = [
   {
     name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
     value: 'false'
@@ -83,24 +91,21 @@ var baseAppSettings array = [
   }
 ]
 
-// 2) Se fornecido SAS token isolado, adiciona CONTAINER_SAS_TOKEN
-var containerSasSettings array = addContainerSas ? [
+var containerSasSettings = addContainerSas ? [
   {
     name: 'CONTAINER_SAS_TOKEN'
     value: containerSasToken
   }
 ] : []
 
-// 3) Se fornecido endpoint completo com SAS, adiciona CONTAINER_ENDPOINT_SAS
-var containerEndpointSettings array = addContainerEndpoint ? [
+var containerEndpointSettings = addContainerEndpoint ? [
   {
     name: 'CONTAINER_ENDPOINT_SAS'
     value: containerEndpointSas
   }
 ] : []
 
-// 4) Configurações de registry privado, se aplicável
-var privateRegistrySettings array = usePrivateRegistry ? [
+var privateRegistrySettings = usePrivateRegistry ? [
   {
     name: 'DOCKER_REGISTRY_SERVER_URL'
     value: containerRegistryUrl
@@ -115,8 +120,7 @@ var privateRegistrySettings array = usePrivateRegistry ? [
   }
 ] : []
 
-// 5) Configuração de FUNCTION_URL, se aplicável
-var functionUrlSettings array = addFunctionUrl ? [
+var functionUrlSettings = addFunctionUrl ? [
   {
     name: 'FUNCTION_URL'
     value: functionUrl
@@ -131,6 +135,18 @@ var functionUrlSettings array = addFunctionUrl ? [
   }
 ] : []
 
+// ✅ Novo bloco: Translator se fornecido
+var translatorSettings = addTranslator ? [
+  {
+    name: 'TRANSLATOR_ENDPOINT'
+    value: translatorEndpoint
+  }
+  {
+    name: 'TRANSLATOR_KEY'
+    value: translatorKey
+  }
+] : []
+
 resource webApp 'Microsoft.Web/sites@2021-03-01' = {
   name: webAppName
   location: resourceGroup().location
@@ -139,32 +155,29 @@ resource webApp 'Microsoft.Web/sites@2021-03-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     siteConfig: {
-      // Imagem de container Docker
       linuxFxVersion: 'DOCKER|${imageName}'
       alwaysOn: true
-
-      // CORS fixo apenas para portal.azure.com
       cors: {
         allowedOrigins: [
           'https://portal.azure.com'
         ]
       }
-
-      // Concatena todos os arrays de App Settings, incluindo apenas os não vazios
       appSettings: concat(
         concat(
           concat(
             concat(
-              baseAppSettings,
-              containerSasSettings
+              concat(
+                baseAppSettings,
+                containerSasSettings
+              ),
+              containerEndpointSettings
             ),
-            containerEndpointSettings
+            privateRegistrySettings
           ),
-          privateRegistrySettings
+          functionUrlSettings
         ),
-        functionUrlSettings
+        translatorSettings
       )
-
       http20Enabled: true
     }
   }

@@ -323,7 +323,6 @@ jobs:
               echo "ERRO: As URLs das functions estão vazias. Verifique a etapa anterior."
               exit 1
             fi
-            # Define App Settings no Web App:
             az webapp config appsettings set \
               --resource-group "$RG" \
               --name "$WEBAPP_NAME" \
@@ -351,6 +350,8 @@ jobs:
                 functionGetPostsUrl="$GET_POSTS_FUNCTION_URL" \
                 containerEndpointSas="$SAS_FULL" \
                 cosmosAccountName="${COSMOS_ACCOUNT_NAME}" \
+                translatorEndpoint="${{ steps.get_translator_info.outputs.TRANSLATOR_ENDPOINT }}" \
+                translatorKey="${{ steps.get_translator_info.outputs.TRANSLATOR_KEY }}" \
               --only-show-errors
             echo "Web App deployment concluído."
 

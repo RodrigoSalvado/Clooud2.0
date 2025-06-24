@@ -209,16 +209,11 @@ def search():
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
-    import seaborn as sns  # garante que está importado no topo ou aqui
+    import seaborn as sns
     from wordcloud import WordCloud, STOPWORDS
     import matplotlib.pyplot as plt
 
     # --- 0️⃣ Ambiente Cosmos
-    COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
-    COSMOS_KEY = os.getenv("COSMOS_KEY")
-    COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "RedditApp")
-    COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER", "posts")
-
     cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
     db_client = cosmos_client.get_database_client(COSMOS_DATABASE)
     cont_client = db_client.get_container_client(COSMOS_CONTAINER)
@@ -254,20 +249,71 @@ def detail_all():
         flash("Não há posts para análise.", "warning")
         return redirect(url_for("home"))
 
+    # --- 3️⃣ Detectar + traduzir se necessário, guardar text_to_analyse no Cosmos se não existir
     analysed_posts = []
-    text_accum = []
-    neg_probs, neu_probs, pos_probs = [], [], []
-
     texts = []
     posts_index = []
-    for idx, post in enumerate(posts):
-        # Só usa text_to_analyse, senão tenta fallback
-        snippet = (
-            post.get('text_to_analyse', '').strip()
-            or post.get('selftext', '').strip()
-            or post.get('title', '').strip()
-        )
+    neg_probs, neu_probs, pos_probs = [], [], []
+    text_accum = []
 
+    # Credenciais Translator
+    TRANSLATOR_KEY = os.getenv("TRANSLATOR_KEY")
+    TRANSLATOR_ENDPOINT = os.getenv("TRANSLATOR_ENDPOINT")
+    TRANSLATOR_REGION = os.getenv("TRANSLATOR_REGION", "westeurope")
+
+    def detect_language(text):
+        url = TRANSLATOR_ENDPOINT + "/detect"
+        headers = {
+            'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
+            'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
+            'Content-Type': 'application/json'
+        }
+        body = [{'text': text}]
+        resp = requests.post(url, params={'api-version': '3.0'}, headers=headers, json=body)
+        resp.raise_for_status()
+        return resp.json()[0]['language']
+
+    def translate_to_english(text, from_lang=None):
+        url = TRANSLATOR_ENDPOINT + "/translate"
+        headers = {
+            'Ocp-Apim-Subscription-Key': TRANSLATOR_KEY,
+            'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
+            'Content-Type': 'application/json'
+        }
+        params = {'api-version': '3.0', 'to': ['en']}
+        if from_lang:
+            params['from'] = from_lang
+        body = [{'text': text}]
+        resp = requests.post(url, params=params, headers=headers, json=body)
+        resp.raise_for_status()
+        return resp.json()[0]['translations'][0]['text']
+
+    for idx, post in enumerate(posts):
+        # 1️⃣ Usa text_to_analyse se já existir
+        snippet = post.get('text_to_analyse', '').strip()
+
+        # 2️⃣ Caso não exista, detecta + traduz e guarda no Cosmos
+        if not snippet:
+            base_text = post.get('selftext', '').strip() or post.get('title', '').strip()
+            if base_text:
+                try:
+                    detected = detect_language(base_text)
+                    snippet = translate_to_english(base_text, from_lang=detected)
+                    # Guardar de volta no Cosmos
+                    full_id = post.get('id') or post.get('full_id')
+                    if full_id and "_" in full_id:
+                        query = f"SELECT * FROM c WHERE c.id = '{full_id}'"
+                        items = list(cont_client.query_items(query=query, enable_cross_partition_query=True))
+                        if items:
+                            item = items[0]
+                            item["text_to_analyse"] = snippet
+                            cont_client.replace_item(item=item['id'], body=item)
+                            logger.info(f"✅ text_to_analyse guardado no Cosmos: {full_id}")
+                except Exception as e:
+                    logger.error(f"Erro ao traduzir/detectar idioma: {e}", exc_info=True)
+                    snippet = base_text  # fallback
+
+        # 3️⃣ Se ainda assim nada, pula sentimento
         if snippet:
             snippet = snippet[:512]
             texts.append(snippet)
@@ -277,6 +323,7 @@ def detail_all():
             post['probabilidade'] = 0
             analysed_posts.append(post)
 
+    # --- 4️⃣ Sentimento por batch
     batch_size = 16
     for start in range(0, len(texts), batch_size):
         batch_texts = texts[start:start+batch_size]
@@ -307,7 +354,7 @@ def detail_all():
             text_accum.append(batch_texts[j])
             analysed_posts.append(post)
 
-    # --- 3️⃣ Update no Cosmos
+    # --- 5️⃣ Guardar sentimento + confiabilidade no Cosmos
     try:
         for post in analysed_posts:
             full_id = post.get('id') or post.get('full_id')
@@ -316,7 +363,6 @@ def detail_all():
 
             query = f"SELECT * FROM c WHERE c.id = '{full_id}'"
             items = list(cont_client.query_items(query=query, enable_cross_partition_query=True))
-
             if not items:
                 logger.warning(f"❌ Item não encontrado no Cosmos: {full_id}")
                 continue
@@ -324,31 +370,28 @@ def detail_all():
             item = items[0]
             item["sentimento"] = post['sentimento']
             item["confiabilidade"] = round(post['probabilidade'] / 100, 4)
-
             cont_client.replace_item(item=item['id'], body=item)
-            logger.info(f"✅ Actualizado: {full_id}")
+            logger.info(f"✅ Sentimento actualizado: {full_id}")
 
     except Exception as e:
-        logger.error("Erro ao actualizar no Cosmos: %s", e, exc_info=True)
-        flash(f"Erro ao actualizar no Cosmos: {e}", "danger")
+        logger.error("Erro ao actualizar sentimento no Cosmos: %s", e, exc_info=True)
+        flash(f"Erro ao actualizar sentimento no Cosmos: {e}", "danger")
 
-    # --- 4️⃣ Gráfico KDE + Histograma
+    # --- 6️⃣ Gráfico KDE + WordCloud
     os.makedirs("static", exist_ok=True)
     resumo_chart = "static/distribuicao_confianca.png"
+    wc_chart = "static/nuvem_palavras_all.png"
 
     try:
         total = neg_probs + neu_probs + pos_probs
         if len(total) >= 2:
             plt.figure(figsize=(10, 5))
             if len(neg_probs) > 1:
-                sns.histplot(neg_probs, bins=10, kde=True, color="red", label="Negative",
-                             element="step", fill=False)
+                sns.histplot(neg_probs, bins=10, kde=True, color="red", label="Negative", element="step", fill=False)
             if len(neu_probs) > 1:
-                sns.histplot(neu_probs, bins=10, kde=True, color="grey", label="Neutral",
-                             element="step", fill=False)
+                sns.histplot(neu_probs, bins=10, kde=True, color="grey", label="Neutral", element="step", fill=False)
             if len(pos_probs) > 1:
-                sns.histplot(pos_probs, bins=10, kde=True, color="green", label="Positive",
-                             element="step", fill=False)
+                sns.histplot(pos_probs, bins=10, kde=True, color="green", label="Positive", element="step", fill=False)
 
             plt.xlabel("Confiança (%)")
             plt.ylabel("Número de Posts + KDE")
@@ -360,8 +403,6 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar gráfico KDE+Histograma: %s", e, exc_info=True)
 
-    # --- 5️⃣ WordCloud
-    wc_chart = "static/nuvem_palavras_all.png"
     try:
         wordcloud = WordCloud(width=700, height=350, background_color="white",
                               stopwords=set(STOPWORDS)).generate(" ".join(text_accum))
@@ -374,13 +415,14 @@ def detail_all():
     except Exception as e:
         logger.error("Erro ao gerar WordCloud: %s", e, exc_info=True)
 
-    logger.info("[DETAIL_ALL] Tudo concluído.")
+    logger.info("[DETAIL_ALL] Tudo concluído com Translator.")
     return render_template(
         "detail_all.html",
         posts=analysed_posts,
         resumo_chart=resumo_chart,
         wc_chart=wc_chart
     )
+
 
 
 
