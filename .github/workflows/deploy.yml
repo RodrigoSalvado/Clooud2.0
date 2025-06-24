@@ -1,4 +1,4 @@
-name: Deploy Bicep + Web App e Function App (hardcoded credentials)
+name: Deploy Bicep + Web App e Function App
 
 on:
   push:
@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Ajuste estes valores conforme teu ambiente
       COSMOS_ACCOUNT_NAME: 'cosmosdbminiprojeto'
       COSMOS_THROUGHPUT: '400'
       FUNCTIONAPP_NAME: 'func-rodrig0salv'
@@ -25,7 +24,6 @@ jobs:
       AZURE_FUNCTIONAPP_PACKAGE_PATH: './redditIngestFunc'
       STORAGE_ACCOUNT_NAME: 'miniprojetostorage20'
       CONTAINER_NAME: 'reddit-posts'
-      # Credenciais hardcoded (não seguro em repositório público!)
       REDDIT_USER: 'Major-Noise-6411'
       REDDIT_PASSWORD: 'miniprojetocloud'
       CLIENT_ID: 'bzG6zHjC23GSenSIXe0M-Q'
@@ -104,7 +102,7 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "🔹 A criar o Translator com API TextTranslation (SKU S1)..."
+            echo "A criar o Translator com API TextTranslation (SKU S1)..."
 
             az cognitiveservices account create \
               --name "translator" \
@@ -114,7 +112,7 @@ jobs:
               --location "westeurope" \
               --yes
 
-            echo "✅ Translator criado com sucesso."
+            echo "Translator criado com sucesso."
 
 
       - name: Obter endpoint e key
@@ -146,7 +144,7 @@ jobs:
               exit 0
             fi
             if az cosmosdb show --name "$ACCOUNT_NAME" --resource-group "$RG" &>/dev/null; then
-              echo "Conta Cosmos DB '$ACCOUNT_NAME' já existe em RG '$RG'. Pulando deploy."
+              echo "Conta Cosmos DB '$ACCOUNT_NAME' já existe em RG '$RG'. Skippar deploy."
             else
               echo "Conta Cosmos DB '$ACCOUNT_NAME' NÃO existe. Realizando deploy em $TARGET_LOCATION..."
               DEPLOY_NAME="deploy-cosmos-$(date +%s)"

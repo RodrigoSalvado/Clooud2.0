@@ -451,9 +451,6 @@ def detail_all():
     )
 
 
-
-
-
 @app.route("/gerar_relatorio", methods=["POST"])
 def gerar_relatorio():
     post_ids = session.get("post_ids")
@@ -466,7 +463,7 @@ def gerar_relatorio():
         flash("CONTAINER_ENDPOINT_SAS inválido ou ausente.", "danger")
         return redirect(url_for("home"))
 
-    # 1️⃣ Buscar dados completos do Cosmos
+    # 1) Buscar dados completos do Cosmos
     try:
         posts = get_posts_from_cosmos(post_ids)
     except Exception as e:
@@ -474,36 +471,10 @@ def gerar_relatorio():
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
         return redirect(url_for("home"))
 
-    if not posts:
-        flash("Nenhum post encontrado no Cosmos.", "warning")
-        return redirect(url_for("home"))
-
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    df = pd.DataFrame(posts)
     local_csv_name = f"relatorio_{timestamp}.csv"
-
-    # ✅ Escolhe só os campos desejados e sanitiza
-    rows = []
-    for p in posts:
-        row = {
-            "id": p.get("id", ""),
-            "subreddit": p.get("subreddit", ""),
-            "title": p.get("title", "").replace('\n', ' ').strip(),
-            "selftext": p.get("selftext", "").replace('\n', ' ').strip(),
-            "url": p.get("url", ""),
-            "text_to_analyse": p.get("text_to_analyse", "").replace('\n', ' ').strip(),
-            "sentimento": p.get("sentimento", ""),
-            "confiabilidade": p.get("confiabilidade", "")
-        }
-        rows.append(row)
-
-    df = pd.DataFrame(rows, columns=[
-        "id", "subreddit", "title", "selftext", "url",
-        "text_to_analyse", "sentimento", "confiabilidade"
-    ])
-
-    # Salva como CSV limpo
     df.to_csv(local_csv_name, index=False, encoding="utf-8")
-    logger.info(f"✅ CSV criado localmente: {local_csv_name}")
 
     try:
         # Separar base e token
@@ -511,7 +482,6 @@ def gerar_relatorio():
         if len(parts) != 2:
             raise ValueError("Formato inválido de CONTAINER_ENDPOINT_SAS")
         sas_url_base, sas_token = parts
-
         # Upload CSV
         blob_url = f"{sas_url_base}/{local_csv_name}?{sas_token}"
         blob_client = BlobClient.from_blob_url(blob_url)
@@ -520,7 +490,6 @@ def gerar_relatorio():
                 content_type="text/csv",
                 content_disposition="inline"
             ))
-
         # Upload de gráficos, se existirem
         candidatos = [
             ("static/distribuicao_confianca.png", f"distribuicao_confianca_{timestamp}.png"),
@@ -535,9 +504,7 @@ def gerar_relatorio():
                         content_type="image/png",
                         content_disposition="inline"
                     ))
-
-        flash("Relatório CSV e gráficos enviados com sucesso.", "success")
-
+        flash("Relatório e gráficos enviados com sucesso.", "success")
     except Exception as e:
         logger.error("Erro ao enviar para Azure Blob Storage: %s", e, exc_info=True)
         flash(f"Erro ao enviar para Azure Blob Storage: {e}", "danger")
