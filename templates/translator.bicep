@@ -6,12 +6,10 @@ resource translator 'Microsoft.CognitiveServices/accounts@2023-05-01' = {
   location: resourceGroup().location
   kind: 'Translator'
   sku: {
-    name: 'F0' // Free tier, muda se quiseres um pago
+    name: 'F0'
   }
-  properties: {
-    apiProperties: {}
-  }
+  properties: {}
 }
 
 output translatorEndpoint string = translator.properties.endpoint
-output translatorKey string = listKeys(translator.id, '2023-05-01').keys[0].value
+// NÃO DEVOLVES KEYS AQUI!

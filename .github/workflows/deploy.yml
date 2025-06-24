@@ -194,7 +194,7 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Translator via Bicep
+      - name: Deploy Translator via Bicep 
         id: deploy_translator
         uses: azure/cli@v1
         with:
@@ -203,32 +203,33 @@ jobs:
 
             DEPLOY_NAME="deploy-translator"
 
-            # Faz deploy do recurso Translator
+            # Faz deploy
             az deployment group create \
               --resource-group "$RG" \
               --name "$DEPLOY_NAME" \
               --template-file templates/translator.bicep \
               --parameters translatorName="translator"
 
-            # Lê os outputs do mesmo deployment
+            # Usa show para obter o endpoint
             OUTPUT=$(az deployment group show \
               --resource-group "$RG" \
               --name "$DEPLOY_NAME" \
               -o json)
 
             TRANSLATOR_ENDPOINT=$(echo $OUTPUT | jq -r '.properties.outputs.translatorEndpoint.value')
-            TRANSLATOR_KEY=$(echo $OUTPUT | jq -r '.properties.outputs.translatorKey.value')
+
+            # Pega na chave de forma segura com o comando dedicado
+            TRANSLATOR_KEY=$(az cognitiveservices account keys list \
+              --resource-group "$RG" \
+              --name "translator" \
+              --query "key1" -o tsv)
 
             echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
             echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
 
-            echo "✅ Translator 'translator' criado com sucesso:"
+            echo "✅ Translator criado:"
             echo "Endpoint: $TRANSLATOR_ENDPOINT"
             echo "Key: $TRANSLATOR_KEY"
-
-
-
-
 
       - name: Deploy Function App via Bicep 
         uses: azure/cli@v1
