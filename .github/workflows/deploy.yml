@@ -194,23 +194,30 @@ jobs:
           echo "A enviar a imagem Docker para Docker Hub"
           docker push rodrig0salv/minha-app:latest
 
-      - name: Deploy Translator via Bicep 
+      - name: Deploy Translator via Bicep (só cria)
         id: deploy_translator
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "A criar Translator 'translator'..."
-
-            DEPLOY_NAME="deploy-translator"
-
-            # Faz deploy
+            echo "🔹 A criar o Translator 'translator'..."
             az deployment group create \
               --resource-group "$RG" \
-              --name "$DEPLOY_NAME" \
+              --name "deploy-translator" \
               --template-file templates/translator.bicep \
               --parameters translatorName="translator"
 
-            # Usa show para obter o endpoint
+            echo "✅ Translator deploy criado. Outputs serão lidos a seguir."
+      
+      - name: Obter endpoint e key do Translator (passo separado)
+        id: get_translator_info
+        uses: azure/cli@v1
+        with:
+          inlineScript: |
+            echo "🔹 A buscar outputs do deployment e a listar keys..."
+
+            DEPLOY_NAME="deploy-translator"
+
+            # Lê o output do deployment para apanhar o endpoint
             OUTPUT=$(az deployment group show \
               --resource-group "$RG" \
               --name "$DEPLOY_NAME" \
@@ -218,7 +225,7 @@ jobs:
 
             TRANSLATOR_ENDPOINT=$(echo $OUTPUT | jq -r '.properties.outputs.translatorEndpoint.value')
 
-            # Pega na chave de forma segura com o comando dedicado
+            # Usa comando oficial para obter a chave segura
             TRANSLATOR_KEY=$(az cognitiveservices account keys list \
               --resource-group "$RG" \
               --name "translator" \
@@ -227,9 +234,11 @@ jobs:
             echo "TRANSLATOR_ENDPOINT=$TRANSLATOR_ENDPOINT" >> $GITHUB_OUTPUT
             echo "TRANSLATOR_KEY=$TRANSLATOR_KEY" >> $GITHUB_OUTPUT
 
-            echo "✅ Translator criado:"
+            echo "✅ Translator Info:"
             echo "Endpoint: $TRANSLATOR_ENDPOINT"
             echo "Key: $TRANSLATOR_KEY"
+
+
 
       - name: Deploy Function App via Bicep 
         uses: azure/cli@v1
