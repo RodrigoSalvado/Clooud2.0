@@ -383,25 +383,37 @@ def detail_all():
     wc_chart = "static/nuvem_palavras_all.png"
 
     try:
-        total = neg_probs + neu_probs + pos_probs
-        if len(total) >= 2:
-            plt.figure(figsize=(10, 5))
-            if len(neg_probs) > 1:
-                sns.histplot(neg_probs, bins=10, kde=True, color="red", label="Negative", element="step", fill=False)
-            if len(neu_probs) > 1:
-                sns.histplot(neu_probs, bins=10, kde=True, color="grey", label="Neutral", element="step", fill=False)
-            if len(pos_probs) > 1:
-                sns.histplot(pos_probs, bins=10, kde=True, color="green", label="Positive", element="step", fill=False)
+        # --- Dados para barras
+        categorias = []
+        counts = []
+        avg_probs = []
 
-            plt.xlabel("Confiança (%)")
-            plt.ylabel("Número de Posts + KDE")
-            plt.title("Distribuição de Confiança")
-            plt.legend()
+        if neg_probs:
+            categorias.append("Negative")
+            counts.append(len(neg_probs))
+            avg_probs.append(np.mean(neg_probs))
+        if neu_probs:
+            categorias.append("Neutral")
+            counts.append(len(neu_probs))
+            avg_probs.append(np.mean(neu_probs))
+        if pos_probs:
+            categorias.append("Positive")
+            counts.append(len(pos_probs))
+            avg_probs.append(np.mean(pos_probs))
+
+        if categorias:
+            plt.figure(figsize=(8, 5))
+            sns.barplot(x=categorias, y=counts, palette=["red", "grey", "green"])
+            for i, (c, p) in enumerate(zip(counts, avg_probs)):
+                plt.text(i, c + 0.1, f"Media Confiança: {p:.1f}%", ha="center")
+            plt.xlabel("Categoria de Sentimento")
+            plt.ylabel("Número de Posts")
+            plt.title("Número de Posts e Média de Confiança por Categoria")
             plt.tight_layout()
             plt.savefig(resumo_chart, dpi=200)
             plt.close()
     except Exception as e:
-        logger.error("Erro ao gerar gráfico KDE+Histograma: %s", e, exc_info=True)
+        logger.error("Erro ao gerar gráfico de barras resumo: %s", e, exc_info=True)
 
     try:
         wordcloud = WordCloud(width=700, height=350, background_color="white",
