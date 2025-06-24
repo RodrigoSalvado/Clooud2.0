@@ -104,7 +104,7 @@ jobs:
         uses: azure/cli@v1
         with:
           inlineScript: |
-            echo "🔹 A criar Translator dedicado (F0)..."
+            echo "🔹 A criar Translator dedicado (F0) em região suportada..."
 
             az cognitiveservices account create \
               --name "translator" \
