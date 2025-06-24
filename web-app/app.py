@@ -209,6 +209,10 @@ def search():
 
 @app.route("/detail_all", methods=["POST"])
 def detail_all():
+    import seaborn as sns  # garante que está importado no topo ou aqui
+    from wordcloud import WordCloud, STOPWORDS
+    import matplotlib.pyplot as plt
+
     # --- 0️⃣ Ambiente Cosmos
     COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
     COSMOS_KEY = os.getenv("COSMOS_KEY")
@@ -257,10 +261,7 @@ def detail_all():
     texts = []
     posts_index = []
     for idx, post in enumerate(posts):
-        # Nova regra:
-        # 1) Usa text_to_analyse se existir
-        # 2) Senão tenta selftext
-        # 3) Senão tenta title
+        # Só usa text_to_analyse, senão tenta fallback
         snippet = (
             post.get('text_to_analyse', '').strip()
             or post.get('selftext', '').strip()
@@ -268,14 +269,13 @@ def detail_all():
         )
 
         if snippet:
-            snippet = snippet[:512]  # Limita para evitar overflow
+            snippet = snippet[:512]
             texts.append(snippet)
             posts_index.append(idx)
         else:
             post['sentimento'] = 'Unknown'
             post['probabilidade'] = 0
             analysed_posts.append(post)
-
 
     batch_size = 16
     for start in range(0, len(texts), batch_size):
@@ -307,15 +307,13 @@ def detail_all():
             text_accum.append(batch_texts[j])
             analysed_posts.append(post)
 
-    # --- 3️⃣ Update seguro no Cosmos
+    # --- 3️⃣ Update no Cosmos
     try:
         for post in analysed_posts:
             full_id = post.get('id') or post.get('full_id')
             if not full_id or "_" not in full_id:
                 continue
-            pk = full_id.split("_", 1)[0].strip()
 
-            # Verificar existência primeiro
             query = f"SELECT * FROM c WHERE c.id = '{full_id}'"
             items = list(cont_client.query_items(query=query, enable_cross_partition_query=True))
 
@@ -334,9 +332,7 @@ def detail_all():
         logger.error("Erro ao actualizar no Cosmos: %s", e, exc_info=True)
         flash(f"Erro ao actualizar no Cosmos: {e}", "danger")
 
-    # --- 4️⃣ Gráfico de KDE
-    import seaborn as sns  # se ainda não tiveres, instala: pip install seaborn
-
+    # --- 4️⃣ Gráfico KDE + Histograma
     os.makedirs("static", exist_ok=True)
     resumo_chart = "static/distribuicao_confianca.png"
 
@@ -344,28 +340,25 @@ def detail_all():
         total = neg_probs + neu_probs + pos_probs
         if len(total) >= 2:
             plt.figure(figsize=(10, 5))
-
-            # Histograma + KDE para cada classe
             if len(neg_probs) > 1:
-                sns.histplot(neg_probs, bins=10, kde=True, stat="count",
-                            color="red", label="Negative", element="step", fill=False)
+                sns.histplot(neg_probs, bins=10, kde=True, color="red", label="Negative",
+                             element="step", fill=False)
             if len(neu_probs) > 1:
-                sns.histplot(neu_probs, bins=10, kde=True, stat="count",
-                            color="grey", label="Neutral", element="step", fill=False)
+                sns.histplot(neu_probs, bins=10, kde=True, color="grey", label="Neutral",
+                             element="step", fill=False)
             if len(pos_probs) > 1:
-                sns.histplot(pos_probs, bins=10, kde=True, stat="count",
-                            color="green", label="Positive", element="step", fill=False)
+                sns.histplot(pos_probs, bins=10, kde=True, color="green", label="Positive",
+                             element="step", fill=False)
 
             plt.xlabel("Confiança (%)")
-            plt.ylabel("Número de Posts (Histograma) + Curva KDE")
-            plt.title("Distribuição de Confiança (Histograma + KDE)")
+            plt.ylabel("Número de Posts + KDE")
+            plt.title("Distribuição de Confiança")
             plt.legend()
             plt.tight_layout()
             plt.savefig(resumo_chart, dpi=200)
             plt.close()
     except Exception as e:
-        logger.error("Erro ao gerar gráfico combinado KDE+Histograma: %s", e, exc_info=True)
-
+        logger.error("Erro ao gerar gráfico KDE+Histograma: %s", e, exc_info=True)
 
     # --- 5️⃣ WordCloud
     wc_chart = "static/nuvem_palavras_all.png"
@@ -388,6 +381,7 @@ def detail_all():
         resumo_chart=resumo_chart,
         wc_chart=wc_chart
     )
+
 
 
 

@@ -41,7 +41,7 @@ TRANSLATOR_KEY = os.environ.get("TRANSLATOR_KEY")
 TRANSLATOR_ENDPOINT = os.environ.get("TRANSLATOR_ENDPOINT")
 TRANSLATOR_REGION = os.environ.get("TRANSLATOR_REGION", "francecentral")
 
-# --- Funções de Tradução ---Add commentMore actions
+# --- Funções de Tradução ---
 def detect_language(text: str) -> str:
     """Detecta o idioma de um texto usando Azure Translator."""
     path = '/detect'
@@ -56,7 +56,6 @@ def detect_language(text: str) -> str:
     resp = requests.post(url, params=params, headers=headers, json=body)
     resp.raise_for_status()
     return resp.json()[0]['language']
-
 
 def translate_to_english(text: str, from_lang: str = None) -> str:
     """Traduz texto para inglês usando Azure Translator."""
@@ -132,7 +131,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         posts = _fetch_and_store(subreddit, sort, limit)
     except Exception as e:
-        logger.error(f"Erro interno na ingestão: {e}", exc_info=e)
+        logger.error(f"Erro interno na ingestão: {e}", exc_info=True)
         return func.HttpResponse(
             json.dumps({"error": str(e)}, ensure_ascii=False),
             status_code=500, mimetype="application/json"
@@ -145,6 +144,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "subreddit": p.get("subreddit"),
             "title": p.get("title"),
             "selftext": p.get("selftext"),
+            "text_to_analyse": p.get("text_to_analyse"),
             "url": p.get("url")
         })
 
@@ -183,8 +183,8 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
         raise RuntimeError("Resposta inesperada da API do Reddit.")
 
     client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
-    db     = client.create_database_if_not_exists(COSMOS_DATABASE)
-    cont   = db.create_container_if_not_exists(
+    db = client.create_database_if_not_exists(COSMOS_DATABASE)
+    cont = db.create_container_if_not_exists(
         id=COSMOS_CONTAINER,
         partition_key={"path": "/subreddit"}
     )
@@ -199,12 +199,13 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
         title = d.get("title", "") or ""
         selftext = d.get("selftext", "") or ""
 
-        if selftext.strip():
-            detected_lang = detect_language(selftext)
-            text_to_analyse = translate_to_english(selftext, from_lang=detected_lang)
-        else:
-            detected_lang = detect_language(title)
-            text_to_analyse = translate_to_english(title, from_lang=detected_lang)
+        # Escolher base para análise
+        base_text = selftext.strip() or title.strip()
+        if not base_text:
+            continue
+
+        detected_lang = detect_language(base_text)
+        text_to_analyse = translate_to_english(base_text, from_lang=detected_lang)
 
         item = {
             "id": f"{subreddit}_{rid}",
@@ -216,7 +217,7 @@ def _fetch_and_store(subreddit: str, sort: str, limit: int):
         }
 
         cont.upsert_item(item)
-        logger.info(f"Upserted item: {item['id']}")
+        logger.info(f"✅ Upserted item: {item['id']}")
         posts.append(item)
 
     return posts
