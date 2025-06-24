@@ -4,10 +4,11 @@ pandas
 numpy
 matplotlib
 scipy
+seaborn
 transformers
 torch
 wordcloud
 azure-storage-blob
 azure-cosmos
-dotenv
-seaborn
+python-dotenv
+reportlab

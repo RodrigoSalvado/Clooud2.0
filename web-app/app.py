@@ -439,6 +439,11 @@ def detail_all():
 
 
 
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+
 @app.route("/gerar_relatorio", methods=["POST"])
 def gerar_relatorio():
     post_ids = session.get("post_ids")
@@ -451,7 +456,7 @@ def gerar_relatorio():
         flash("CONTAINER_ENDPOINT_SAS inválido ou ausente.", "danger")
         return redirect(url_for("home"))
 
-    # 1) Buscar dados completos do Cosmos
+    # 1️⃣ Buscar dados completos do Cosmos
     try:
         posts = get_posts_from_cosmos(post_ids)
     except Exception as e:
@@ -459,26 +464,78 @@ def gerar_relatorio():
         flash(f"Erro ao buscar posts do Cosmos: {e}", "danger")
         return redirect(url_for("home"))
 
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-    df = pd.DataFrame(posts)
-    local_csv_name = f"relatorio_{timestamp}.csv"
-    df.to_csv(local_csv_name, index=False, encoding="utf-8")
+    if not posts:
+        flash("Nenhum post encontrado no Cosmos.", "warning")
+        return redirect(url_for("home"))
 
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    local_pdf_name = f"relatorio_{timestamp}.pdf"
+
+    # 2️⃣ Criar PDF com ReportLab
     try:
-        # Separar base e token
+        doc = SimpleDocTemplate(local_pdf_name, pagesize=A4)
+        elements = []
+        styles = getSampleStyleSheet()
+
+        # Cabeçalho
+        title = Paragraph(f"Relatório de Posts - {timestamp}", styles['Heading1'])
+        elements.append(title)
+
+        # Tabela com cabeçalho
+        headers = ["ID", "Subreddit", "Title", "Selftext", "URL", "Text to Analyse", "Sentimento", "Confiabilidade"]
+        data = [headers]
+
+        for p in posts:
+            row = [
+                p.get("id", ""),
+                p.get("subreddit", ""),
+                p.get("title", ""),
+                p.get("selftext", ""),
+                p.get("url", ""),
+                p.get("text_to_analyse", ""),
+                p.get("sentimento", ""),
+                str(p.get("confiabilidade", ""))
+            ]
+            data.append(row)
+
+        # Tabela com estilo
+        t = Table(data, repeatRows=1, colWidths=[70, 70, 100, 120, 100, 120, 50, 50])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.black),
+        ]))
+        elements.append(t)
+
+        doc.build(elements)
+        logger.info(f"✅ PDF criado localmente: {local_pdf_name}")
+
+    except Exception as e:
+        logger.error(f"Erro ao gerar PDF: {e}", exc_info=True)
+        flash(f"Erro ao gerar PDF: {e}", "danger")
+        return redirect(url_for("home"))
+
+    # 3️⃣ Upload PDF para Blob Storage
+    try:
         parts = CONTAINER_ENDPOINT_SAS.split('?', 1)
         if len(parts) != 2:
             raise ValueError("Formato inválido de CONTAINER_ENDPOINT_SAS")
         sas_url_base, sas_token = parts
-        # Upload CSV
-        blob_url = f"{sas_url_base}/{local_csv_name}?{sas_token}"
+
+        blob_url = f"{sas_url_base}/{local_pdf_name}?{sas_token}"
         blob_client = BlobClient.from_blob_url(blob_url)
-        with open(local_csv_name, "rb") as data:
+        with open(local_pdf_name, "rb") as data:
             blob_client.upload_blob(data, overwrite=True, content_settings=ContentSettings(
-                content_type="text/csv",
+                content_type="application/pdf",
                 content_disposition="inline"
             ))
-        # Upload de gráficos, se existirem
+
+        # Enviar gráficos, se existirem
         candidatos = [
             ("static/distribuicao_confianca.png", f"distribuicao_confianca_{timestamp}.png"),
             ("static/nuvem_palavras_all.png", f"nuvem_palavras_all_{timestamp}.png")
@@ -492,12 +549,15 @@ def gerar_relatorio():
                         content_type="image/png",
                         content_disposition="inline"
                     ))
-        flash("Relatório e gráficos enviados com sucesso.", "success")
+
+        flash("Relatório PDF e gráficos enviados com sucesso.", "success")
+
     except Exception as e:
-        logger.error("Erro ao enviar para Azure Blob Storage: %s", e, exc_info=True)
-        flash(f"Erro ao enviar para Azure Blob Storage: {e}", "danger")
+        logger.error("Erro ao enviar PDF para Azure Blob Storage: %s", e, exc_info=True)
+        flash(f"Erro ao enviar PDF para Azure Blob Storage: {e}", "danger")
 
     return redirect(url_for("home"))
+
 
 
 @app.route("/listar_ficheiros", methods=["GET"])
